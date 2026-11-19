@@ -1,0 +1,4 @@
+# Optional extras for --provider bart (local facebook/bart-large-cnn).
+-r requirements.txt
+transformers>=4.40
+torch>=2.2

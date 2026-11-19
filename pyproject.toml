@@ -1,0 +1,19 @@
+# Tool configuration only (the project is a single script, not an installable
+# package yet). Dependencies live in requirements*.txt.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "network: hits real external services (deselected by default in CI)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["NLP", ".venv"]
+
+[tool.ruff.lint]
+# pycodestyle errors (E4/E7/E9) + pyflakes (F): real bugs and syntax problems,
+# without imposing a style rewrite on the existing code.
+select = ["E4", "E7", "E9", "F"]

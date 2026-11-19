@@ -1,0 +1,9 @@
+# Store text with LF in the repo and check it out as LF everywhere, so diffs are
+# identical on Windows, macOS and Linux (CI runs on both).
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.xlsx binary
+*.pdf binary
+*.docx binary
+*.png binary

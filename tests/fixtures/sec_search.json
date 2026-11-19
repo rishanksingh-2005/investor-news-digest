@@ -1,0 +1,59 @@
+{
+  "hits": {
+    "total": {"value": 4},
+    "hits": [
+      {
+        "_id": "0001767258-26-000096:xpelq32026earningsrelease.htm",
+        "_source": {
+          "adsh": "0001767258-26-000096",
+          "ciks": ["0001767258"],
+          "display_names": ["XPEL, Inc.  (XPEL)  (CIK 0001767258)"],
+          "file_type": "EX-99.1",
+          "form": "8-K",
+          "root_forms": ["8-K"],
+          "file_date": "2026-11-04",
+          "file_description": "EARNINGS RELEASE"
+        }
+      },
+      {
+        "_id": "0001767258-26-000096:xpel-20261104.htm",
+        "_source": {
+          "adsh": "0001767258-26-000096",
+          "ciks": ["0001767258"],
+          "display_names": ["XPEL, Inc.  (XPEL)  (CIK 0001767258)"],
+          "file_type": "8-K",
+          "form": "8-K",
+          "root_forms": ["8-K"],
+          "file_date": "2026-11-04",
+          "file_description": "8-K"
+        }
+      },
+      {
+        "_id": "0001767258-26-000101:xpel-20260930.htm",
+        "_source": {
+          "adsh": "0001767258-26-000101",
+          "ciks": ["0001767258"],
+          "display_names": ["XPEL, Inc.  (XPEL)  (CIK 0001767258)"],
+          "file_type": "10-Q",
+          "form": "10-Q",
+          "root_forms": ["10-Q"],
+          "file_date": "2026-11-06",
+          "file_description": "QUARTERLY REPORT"
+        }
+      },
+      {
+        "_id": "0001410368-26-110719:primary_doc.xml",
+        "_source": {
+          "adsh": "0001410368-26-110719",
+          "ciks": ["0000806633"],
+          "display_names": ["WASATCH FUNDS TRUST  (CIK 0000806633)"],
+          "file_type": "NPORT-P",
+          "form": "NPORT-P",
+          "root_forms": ["NPORT-P"],
+          "file_date": "2026-11-04",
+          "file_description": ""
+        }
+      }
+    ]
+  }
+}
