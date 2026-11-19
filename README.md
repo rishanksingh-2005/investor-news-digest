@@ -61,6 +61,49 @@ Every Tier-1 company keeps its best item.
 If the chosen LLM is unreachable, the run never hangs: it falls back to an
 offline summary built from the article's own lead sentences.
 
+**Accuracy safeguards**
+
+- **Number check.** Every figure in an AI-written bullet (amounts, percentages,
+  counts) must appear in the source article, allowing for rounding and units
+  (`£40.3m` supports `£40m`, `£1,234 million` supports `£1.2bn`, `22 percent`
+  supports `22%`). A bullet with a figure that isn't in the article is replaced by
+  the article's own sentences, and is never cached. Merged topic summaries get the
+  same check against their member stories. In live testing this caught a bullet
+  claiming "revenue climbed 7.9%" when the article contains no such figure. Turn
+  it off with `verify_figures = False`.
+- **Whole-word matching.** Keywords and company names match from the start of a
+  word, so "order" no longer matches "border", "fine" no longer matches "finance",
+  and "stake" no longer matches "stakeholder". Hyphenated keywords such as
+  "half-year" match either spelling.
+- **Constrained JSON.** Topic grouping asks the model for a fixed JSON format
+  (Ollama and OpenAI support this). Small slips are repaired instead of the
+  whole answer being thrown away: a forgotten story becomes its own point, and a
+  repeated one is dropped.
+
+**Run report and exit codes**
+
+Each run ends with a health report: calls per source, stories read, how each
+bullet was made, and an overall status. The report is also written to a log
+file in `logs/`:
+
+```
+Run report
+  Finnhub                            4 ok
+  Google News                        7 ok
+  SEC EDGAR                          4 ok
+  bullets: AI (cached)               6
+  bullets: replaced by number check  1
+  Status: OK
+```
+
+The exit code tells a scheduler how the run went:
+
+| Code | Meaning |
+|---|---|
+| `0` | OK. Published, or nothing material this window. |
+| `1` | Failed. Watchlist problem, crash, or no stories from any source (usually a Google consent page, rate limit or no network). |
+| `2` | Degraded. Published, but a source failed more often than it worked, Chrome didn't start, or the LLM was unreachable for most bullets. |
+
 ### Speed and caching
 
 The run happens in phases, and each phase works through all companies in
@@ -307,6 +350,8 @@ Everything else lives in the `Config` dataclass at the top of `news digest.py`:
 | `http_fast_path` | on | Try plain HTTP before Chrome for non-Google links. |
 | `use_cache`, `cache_path` | on, `digest_cache.sqlite` | The SQLite run cache. |
 | `feed_cache_minutes` / `article_cache_days` / `failed_article_retry_hours` | 60 / 30 / 24 | How long each kind of cached item is reused. |
+| `verify_figures` | on | Number check on AI bullets and summaries. |
+| `log_dir` | `<output_dir>/logs` | Where run logs go (`""` turns logging off). |
 
 Source blocklist, relevance keywords and noise patterns are module-level lists
 just below `Config` (`SOURCE_BLOCKLIST`, `RELEVANCE_KEYWORDS`, …).
@@ -353,6 +398,8 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 | `couldn't find a company-name column` | Rename the column to `Company`/`Name`, or use `--map name="Your Header"`. Check with `--check`. |
 | `No companies found for the selected tiers` | Your tier values don't match `--tiers`. `--check` lists the tiers it found. |
 | `.xls` not supported | Open it in Excel and save as `.xlsx` or `.csv`. |
+| `number check: … not in the article` | The AI wrote a figure the article doesn't contain, so the article's own sentences were used instead. Working as intended. |
+| A scheduled run "fails" with exit code 2 | It published, but something was degraded. The `!` lines at the end of the log say what. |
 
 ---
 
@@ -360,7 +407,7 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # ~145 tests, a few seconds
+python -m pytest          # ~235 tests, a few seconds
 ruff check .              # lint
 ```
 
@@ -392,6 +439,7 @@ tests/                  offline test suite (+ fixtures/)
 .env.example            template for API keys (copy to .env)
 NLP/                    optional local BART model (not in git)
 digest_cache.sqlite     run cache, created on first run (not in git)
+logs/                   one log per run, with the run report (not in git)
 LICENSE                 MIT
 ```
 
@@ -402,6 +450,12 @@ LICENSE                 MIT
   the same story is usually taken from a free outlet instead.
 - Relevance and noise filters are keyword rules: they're fast and transparent,
   but they aren't perfect.
+- The number check verifies figures, not meaning. A bullet can quote only real
+  numbers and still misstate what they refer to.
+- With the default 3B local model, topic grouping is always valid JSON but not
+  always good judgement: it can put unrelated points (results and a CFO change,
+  say) under one heading. A larger model (`--model llama3.1:8b`, or
+  `--provider openai`/`anthropic`) groups noticeably better.
 
 *Summaries are AI-assisted. Verify against the linked source before making any
 investment decision. Not investment advice.*

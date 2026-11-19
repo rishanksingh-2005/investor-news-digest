@@ -80,7 +80,7 @@ def test_llm_bullets_cached_but_fallbacks_are_not(nd, cfg, cache, make_article, 
     body = "Acme raised guidance to £1.2bn after a record half. " * 4
     calls = []
 
-    def llm(prompt, cfg, max_tokens=160):
+    def llm(prompt, cfg, max_tokens=160, **kw):
         calls.append(1)
         return "Acme lifted FY guidance to £1.2bn"
 
@@ -107,7 +107,7 @@ def test_topic_grouping_answer_is_cached(nd, cfg, cache, make_article, monkeypat
     reply = json.dumps([{"heading": "Contracts", "members": [1, 2], "summary": "Acme won a contract."}])
     calls = []
 
-    def llm(prompt, cfg, max_tokens=160):
+    def llm(prompt, cfg, max_tokens=160, **kw):
         calls.append(prompt)
         return reply
 
@@ -119,7 +119,7 @@ def test_topic_grouping_answer_is_cached(nd, cfg, cache, make_article, monkeypat
     assert [(h, s) for h, s, _ in first] == [(h, s) for h, s, _ in second]
 
 
-@pytest.mark.parametrize("reply", ["no json here", '[{"members": [1]}]', '[{"heading": "x"}]', "[[1, 2]]"])
+@pytest.mark.parametrize("reply", ["no json here", '[{"members": []}]', '[{"heading": "x"}]', "[[1, 2]]"])
 def test_unusable_grouping_is_remembered_and_falls_back(nd, cfg, cache, make_article, monkeypatch, reply):
     nd._CACHE = cache
     co = nd.Company(name="Acme Widgets Plc")

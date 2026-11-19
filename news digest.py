@@ -34,6 +34,7 @@ import os
 import re
 import time
 import csv
+import sys
 import hashlib
 import html
 import io
@@ -149,6 +150,10 @@ class Config:
     init_watchlist: str | None = None    # --init-watchlist FILE: write a starter file, then exit
     doctor: bool = False                 # --doctor: check setup and test API keys, then exit
 
+    # Accuracy / run health
+    verify_figures: bool = True          # replace AI bullets whose numbers aren't in the article
+    log_dir: str | None = None           # run logs; None = "<output_dir>/logs", "" = no log file
+
     # Dedup / merge thresholds (higher = stricter, fewer things treated as dup)
     title_similarity: float = 0.82       # stage 1: near-identical headline dedupe
     merge_text_ratio: float = 0.58       # stage 2: same-event if bullet text this similar
@@ -250,6 +255,23 @@ RELEVANCE_KEYWORDS = [
     "margin", "outlook", "upgrade", "downgrade", "rating", "regulatory", "fine",
     "lawsuit", "expansion", "launch", "investment",
 ]
+
+# Keywords are matched at the START of a word ("acquire" -> acquired, acquires),
+# never inside one. These short ones must match the WHOLE word (plus plural /
+# past-tense endings), because as prefixes they still hit the wrong words:
+# "order" -> "orderly", "fine" -> "finance", "stake" -> "stakeholder",
+# "deal" -> "dealer", "ipo" -> "ipod".
+_WHOLE_WORD_KEYWORDS = {"order", "fine", "ipo", "ceo", "cfo", "deal", "stake", "loss"}
+
+
+def _keyword_rx(kw: str) -> str:
+    # spaces and hyphens are interchangeable ("half-year" == "half year"; _norm
+    # turns hyphens into spaces, so a literal "half-year" never used to match)
+    body = r"[\s-]+".join(re.escape(w) for w in re.split(r"[\s-]+", kw.strip()))
+    return rf"\b{body}(?:s|es|d|ed)?\b" if kw in _WHOLE_WORD_KEYWORDS else rf"\b{body}"
+
+
+RELEVANCE_RX = re.compile("|".join(_keyword_rx(k) for k in RELEVANCE_KEYWORDS), re.I)
 
 # Share-price / market-data noise. If a story's lead is mostly this AND reports no
 # real corporate event, it is dropped (it doesn't clear the quality bar).
@@ -1016,6 +1038,96 @@ class Cache:
 _CACHE = Cache(None)
 
 
+# ============================================================================
+# Run health report
+#
+# Every source and step records what happened. At the end of a run this is
+# printed as a short report, written to the log, and turned into an exit code a
+# scheduler can act on:  0 = OK, 1 = failed (nothing usable produced),
+# 2 = published but degraded (a source or the LLM was failing).
+# ============================================================================
+EXIT_OK, EXIT_FAILED, EXIT_DEGRADED = 0, 1, 2
+
+
+class RunReport:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.sources: dict = {}       # name -> {"ok": n, "error": n, "skipped": n, "errors": [...]}
+        self.counts: dict = {}        # free-form counters ("bullets: AI", ...)
+        self.fatal = ""               # reason the run produced nothing usable
+        self.warnings: list = []
+
+    def source(self, name: str, outcome: str, detail: str = "") -> None:
+        with self._lock:
+            s = self.sources.setdefault(name, {"ok": 0, "error": 0, "skipped": 0, "errors": []})
+            s[outcome] += 1
+            if detail and outcome == "error" and detail not in s["errors"] and len(s["errors"]) < 3:
+                s["errors"].append(detail[:120])
+
+    def count(self, key: str, n: int = 1) -> None:
+        with self._lock:
+            self.counts[key] = self.counts.get(key, 0) + n
+
+    def warn(self, msg: str) -> None:
+        with self._lock:
+            if msg not in self.warnings:
+                self.warnings.append(msg)
+
+    def all_warnings(self) -> list:
+        w = list(self.warnings)
+        for name, s in sorted(self.sources.items()):
+            if s["error"] > s["ok"]:   # failing more often than it works
+                w.append(f"{name} failed {s['error']} of {s['ok'] + s['error']} times"
+                         + (f" ({s['errors'][0]})" if s["errors"] else ""))
+        bullets = sum(v for k, v in self.counts.items() if k.startswith("bullets:"))
+        down = self.counts.get("bullets: fallback (LLM unreachable)", 0)
+        if bullets and down * 2 >= bullets:
+            w.append(f"LLM unreachable for {down} of {bullets} bullets (plain extracts used)")
+        return w
+
+    def exit_code(self) -> int:
+        if self.fatal:
+            return EXIT_FAILED
+        return EXIT_DEGRADED if self.all_warnings() else EXIT_OK
+
+    def lines(self) -> list[str]:
+        out = ["Run report"]
+        for name, s in sorted(self.sources.items()):
+            bits = [f"{s['ok']} ok"] + [f"{s[k]} {k}" for k in ("error", "skipped") if s[k]]
+            out.append(f"  {name:<34} {', '.join(bits)}")
+        for k, v in sorted(self.counts.items()):
+            out.append(f"  {k:<34} {v}")
+        status = {EXIT_OK: "OK", EXIT_FAILED: "FAILED", EXIT_DEGRADED: "DEGRADED"}[self.exit_code()]
+        out.append(f"  Status: {status}" + (f" ({self.fatal})" if self.fatal else ""))
+        out += [f"  ! {w}" for w in self.all_warnings()]
+        return out
+
+
+# Report for the current (or last) run; main() reads its exit code.
+_REPORT = RunReport()
+
+
+class _Tee:
+    """stdout that also writes to the run log."""
+    def __init__(self, stream, log):
+        self.stream, self.log, self._lock = stream, log, threading.Lock()
+
+    def write(self, s):
+        with self._lock:
+            self.stream.write(s)
+            if not self.log.closed:
+                self.log.write(s)
+        return len(s)
+
+    def flush(self):
+        self.stream.flush()
+        if not self.log.closed:
+            self.log.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
 def _model_name(cfg: "Config") -> str:
     p = cfg.llm_provider.lower()
     return {"ollama": cfg.ollama_model, "openai": cfg.openai_model,
@@ -1073,7 +1185,9 @@ def _google_news_rss(query: str, cfg: Config, origin: str, source_override=None)
             root = ET.fromstring(raw)
     except Exception as e:
         print(f"      [{origin}] feed failed: {e}")
+        _REPORT.source(origin.split(" (")[0], "error", str(e))
         return []
+    _REPORT.source(origin.split(" (")[0], "ok")
 
     out = []
     for item in root.findall(".//item"):
@@ -1165,7 +1279,9 @@ def discover_sec_edgar(company: Company, cfg: Config) -> list[Article]:
             data = json.loads(raw.decode("utf-8", "replace"))
     except Exception as e:
         print(f"      [SEC EDGAR] failed: {e}")
+        _REPORT.source("SEC EDGAR", "error", str(e))
         return []
+    _REPORT.source("SEC EDGAR", "ok")
 
     # Each hit is one *document* (main form or an exhibit), so a single 8-K can
     # appear many times. Keep one entry per filing (accession number), preferring
@@ -1324,6 +1440,7 @@ def discover_finnhub(company: Company, cfg: Config) -> list[Article]:
         # say it once, not once per company
         print("      [Finnhub] no FINNHUB_API_KEY set — skipping Finnhub (optional; get a free key "
               "at finnhub.io/register and put it in .env)")
+        _REPORT.source("Finnhub", "skipped")
         _FINNHUB_DISABLED = True
         return []
     if not company.is_north_am:
@@ -1337,23 +1454,30 @@ def discover_finnhub(company: Company, cfg: Config) -> list[Article]:
         if not symbol:
             print(f"      [Finnhub] no confident ticker match for '{company.name}' — skipping "
                   f"(add its ticker to the watchlist's Ticker column)")
+            _REPORT.source("Finnhub", "skipped")
             return []
         data = _finnhub_get("company-news", {"symbol": symbol, "from": start, "to": end}, key)
     except _FinnhubAuthError:
         print("      [Finnhub] FINNHUB_API_KEY was rejected (HTTP 401) — check the key in .env "
               "(python \"news digest.py\" --doctor tests it); skipping Finnhub for this run")
+        _REPORT.source("Finnhub", "error", "API key rejected (401)")
         _FINNHUB_DISABLED = True
         return []
     except _FinnhubNoAccess:
         print(f"      [Finnhub] '{company.name}' isn't covered by this key's plan (HTTP 403) — skipping")
+        _REPORT.source("Finnhub", "skipped")
         return []
     except Exception as e:
         print(f"      [Finnhub] failed: {e}")
+        _REPORT.source("Finnhub", "error", str(e))
         return []
     if not isinstance(data, list):   # error payloads come back as {"error": "..."}
         if isinstance(data, dict) and data.get("error"):
             print(f"      [Finnhub] {company.name}: {data['error']}")
+        _REPORT.source("Finnhub", "error", str((data or {}).get("error", "unexpected reply"))
+                       if isinstance(data, dict) else "unexpected reply")
         return []
+    _REPORT.source("Finnhub", "ok")
     out = []
     for it in (data or [])[: cfg.max_items_per_source]:
         try:
@@ -1556,6 +1680,8 @@ def _extract_with_browsers(articles: list[Article], cfg: Config) -> None:
                     except Exception as e:
                         print(f"   Chrome failed to start ({e.__class__.__name__}: {e}) — "
                               f"skipping stories that need a browser")
+                        _REPORT.source("Chrome", "error", f"failed to start: {e.__class__.__name__}")
+                        _REPORT.warn("Chrome failed to start: Google News stories could not be read")
                         failed_start.set()
                         return
                 try:
@@ -1647,16 +1773,22 @@ def is_relevant(a: Article, company: Company) -> bool:
     full = _norm(f"{a.headline} {a.snippet} {a.body}")
     if not full.strip():
         return False
-    if not any(kw in full for kw in RELEVANCE_KEYWORDS):
+    if not RELEVANCE_RX.search(full):
         return False
     toks = _company_tokens(company.name)
     distinctive = [t for t in toks if len(t) >= 5] or toks
     # the distinctive company name should appear in the headline/lead, not just
     # buried deep in the body (kills off-topic articles that merely mention it).
-    if not any(t in lead for t in distinctive):
-        if sum(1 for t in set(toks) if t in full) < 2:
+    if not any(_has_word(t, lead) for t in distinctive):
+        if sum(1 for t in set(toks) if _has_word(t, full)) < 2:
             return False
     return True
+
+
+def _has_word(token: str, text: str) -> bool:
+    """`token` at the start of a word in `text`: 'xpel' matches "xpel's" / "xpel inc",
+    but 'gamma' no longer matches inside "omegagamma" and 'trader' not in "autotrader"."""
+    return re.search(rf"\b{re.escape(token)}", text) is not None
 
 
 # Generic geographic / directional / descriptor words that are >=5 chars but are
@@ -1694,9 +1826,9 @@ def strongly_relevant(a: Article, company: Company) -> bool:
     toks = _company_tokens(company.name)
     distinctive = [t for t in toks if len(t) >= 5 and t not in GENERIC_NAME_WORDS]
     if distinctive:
-        return any(t in lead for t in distinctive)
+        return any(_has_word(t, lead) for t in distinctive)
     phrase = " ".join(toks).strip()
-    return bool(phrase) and phrase in lead
+    return bool(phrase) and re.search(rf"\b{re.escape(phrase)}\b", lead) is not None
 
 
 def _parse_dt(iso: str):
@@ -1736,16 +1868,19 @@ def is_no_news(text: str) -> bool:
 # to rank items when trimming to the page budget.
 _IMP_MONEY = re.compile(r"[£$€]\s?\d")
 _IMP_PCT = re.compile(r"\d+(?:\.\d+)?\s?%")
-_IMP_EVENTS = [
-    r"acquisition|acquires?|acquired|acquiring|merger|takeover|buyback|repurchase",
-    r"dividend|guidance|outlook|profit warning",
-    r"contract|order|awarded|secured|mandate|tender",
-    r"\beps\b|revenue|profit|ebitda|margin|earnings|net income|\bloss\b|pre-?tax",
-    r"ceo|cfo|chief executive|chair|appoint|resign|steps? down|stepping down|leaving|succeed",
-    r"investigation|lawsuit|probe|\bfine\b|regulatory|delist|sanction",
-    r"placing|fundraise|rights issue|convertible|senior notes|\bstake\b|disposal|equity raise",
-    r"launch|expansion|expand|partnership|joint venture|\bresults\b|acquire",
-]
+# Each group scores at most once. Every alternative is anchored to the start of
+# a word, and short words must match whole ("order" not "border", "ceo" not in
+# other words, "fine" not "finance", "stake" not "stakeholder").
+_IMP_EVENTS = [re.compile(p) for p in [
+    r"\b(?:acquisition|acquir|merger|takeover|buyback|repurchas)",
+    r"\b(?:dividend|guidance|outlook|profit warning)",
+    r"\b(?:contracts?\b|orders?\b|ordered\b|order book|awarded|secured|mandates?\b|tenders?\b)",
+    r"\b(?:eps\b|revenue|profit|ebitda|margin|earnings|net income|loss(?:es)?\b|pre-?tax)",
+    r"\b(?:ceos?\b|cfos?\b|chief executive|chair|appoint|resign|steps? down|stepping down|succeed)",
+    r"\b(?:investigation|lawsuit|probe\b|fine[sd]?\b|regulator|delist|sanction)",
+    r"\b(?:placing|fundrais|rights issue|convertible|senior notes|stakes?\b|disposal|equity raise)",
+    r"\b(?:launch|expan|partnership|joint venture|results\b)",
+]]
 
 
 def importance_score(text: str) -> int:
@@ -1755,8 +1890,8 @@ def importance_score(text: str) -> int:
         s += 2
     if _IMP_PCT.search(text or ""):
         s += 1
-    for pat in _IMP_EVENTS:
-        if re.search(pat, low):
+    for rx in _IMP_EVENTS:
+        if rx.search(low):
             s += 1
     return s
 
@@ -1768,13 +1903,20 @@ def is_material(text: str, cfg: Config) -> bool:
     return importance_score(text) >= cfg.min_importance
 
 
+# Anchored to word starts, so e.g. "won a" no longer matches inside "won and",
+# "secured" inside "unsecured" or "signed" inside "designed".
+_PRICE_NOISE_RX = [re.compile(rf"\b(?:{p})") for p in PRICE_NOISE_PATTERNS]
+_VALUATION_RX = [re.compile(rf"\b(?:{p})") for p in VALUATION_PATTERNS]
+_STRONG_EVENT_RX = [re.compile(rf"\b(?:{p})") for p in STRONG_EVENT_PATTERNS]
+
+
 def is_price_noise(text: str) -> bool:
     """True if the text is dominated by share-price / valuation chatter and does
     not report a real corporate event."""
     low = (text or "").lower()
-    hits = sum(1 for pat in PRICE_NOISE_PATTERNS if re.search(pat, low))
-    hits += sum(1 for pat in VALUATION_PATTERNS if re.search(pat, low))
-    if hits >= 2 and not any(re.search(p, low) for p in STRONG_EVENT_PATTERNS):
+    hits = sum(1 for rx in _PRICE_NOISE_RX if rx.search(low))
+    hits += sum(1 for rx in _VALUATION_RX if rx.search(low))
+    if hits >= 2 and not any(rx.search(low) for rx in _STRONG_EVENT_RX):
         return True
     return False
 
@@ -1916,26 +2058,6 @@ def _heuristic_groups(articles: list[Article], company: Company, cfg: Config) ->
     return list(groups.values())
 
 
-def _llm_group(articles: list[Article], company: Company, cfg: Config) -> list[list[Article]]:
-    listing = "\n".join(f"{i + 1}. {a.bullet}" for i, a in enumerate(articles))
-    prompt = (
-        f'These numbered news bullets are about "{company.name}". Group together any '
-        f"bullets that report the SAME underlying event or announcement, even if worded "
-        f"differently or seemingly contradictory. Reply with ONLY a JSON array of arrays "
-        f"of bullet numbers, each number used exactly once. Example: [[1,3],[2],[4,5]].\n\n"
-        f"{listing}"
-    )
-    txt = _llm_complete(prompt, cfg)
-    m = re.search(r"\[.*\]", txt, re.S)
-    if not m:
-        raise ValueError("no JSON in response")
-    groups = json.loads(m.group(0))
-    flat = sorted(int(n) for g in groups for n in g)
-    if flat != list(range(1, len(articles) + 1)):
-        raise ValueError("grouping does not cover every bullet exactly once")
-    return [[articles[int(n) - 1] for n in g] for g in groups]
-
-
 def _pick_representative(group: list[Article]):
     if not group:
         return None
@@ -1958,6 +2080,66 @@ def _derive_heading(members: list[Article], company: Company) -> str:
 
 _UNUSABLE = "\x00unusable"   # cache marker: the model's answer for this input was invalid
 
+# The shape the grouping answer must have. Passed to the model as a JSON schema
+# (constrained decoding), so even a 3B model can only return parseable JSON.
+GROUPS_SCHEMA = {
+    "title": "topic_groups",
+    "type": "object",
+    "properties": {"groups": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"heading": {"type": "string"},
+                       "members": {"type": "array", "items": {"type": "integer"}},
+                       "summary": {"type": "string"}},
+        "required": ["heading", "members", "summary"],
+        "additionalProperties": False}}},
+    "required": ["groups"],
+    "additionalProperties": False,
+}
+
+
+def _parse_groups(txt: str, n: int) -> list[tuple]:
+    """Parse and repair a grouping answer -> [(heading, summary, [member numbers])].
+
+    Accepts {"groups": [...]} or a bare [...]. Small slips are repaired rather
+    than throwing the whole answer away: out-of-range or repeated numbers are
+    dropped (and that group's merged summary with them, since it may describe
+    the dropped bullet), and bullets the model forgot become their own group.
+    Raises ValueError if the answer isn't usable at all (no JSON, wrong shape,
+    or it places fewer than half of the bullets)."""
+    try:
+        data = json.loads(txt)
+    except ValueError:
+        m = re.search(r"[\[{].*[\]}]", txt or "", re.S)
+        if not m:
+            raise ValueError("no JSON in response")
+        data = json.loads(m.group(0))
+    if isinstance(data, dict):
+        data = data.get("groups")
+    if not isinstance(data, list) or not all(isinstance(g, dict) for g in data):
+        raise ValueError("grouping is not a list of groups")
+    seen, groups = set(), []
+    for g in data:
+        raw = g.get("members")
+        if not isinstance(raw, list):
+            raise ValueError("group without a members list")
+        members = []
+        for x in raw:
+            try:
+                i = int(x)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= i <= n and i not in seen:
+                seen.add(i)
+                members.append(i)
+        if members:
+            clean = len(members) == len(raw)
+            groups.append((str(g.get("heading") or "").strip(),
+                           str(g.get("summary") or "").strip() if clean else "", members))
+    if len(seen) * 2 < n:
+        raise ValueError(f"grouping placed only {len(seen)} of {n} bullets")
+    groups += [("", "", [i]) for i in range(1, n + 1) if i not in seen]
+    return groups
+
 
 def _llm_organise(articles: list[Article], company: Company, cfg: Config):
     """Ask the model to group bullets by topic, label each group, and merge each
@@ -1968,9 +2150,10 @@ def _llm_organise(articles: list[Article], company: Company, cfg: Config):
         f"deciding whether the stock is worth holding. Group bullets that concern the "
         f"SAME topic or event. For each group give: a short 2-4 word \"heading\" (topic "
         f"label), the member bullet numbers, and one \"summary\" (one or two sentences, "
-        f"max ~45 words) that merges the members into a single clear point. Reply with "
-        f"ONLY JSON like [{{\"heading\": \"...\", \"members\": [1,2], \"summary\": \"...\"}}]. "
-        f"Every bullet number must appear exactly once.\n\n{listing}"
+        f"max ~45 words) that merges the members into a single clear point, using only "
+        f"facts and figures stated in its bullets. Reply with ONLY JSON like "
+        f"{{\"groups\": [{{\"heading\": \"...\", \"members\": [1,2], \"summary\": \"...\"}}]}}. "
+        f"Every bullet number from 1 to {len(articles)} must appear in exactly one group.\n\n{listing}"
     )
     # Same bullets -> same prompt -> reuse the answer (bullets are cached too, so a
     # re-run with nothing new skips the LLM entirely). An unusable answer is
@@ -1982,27 +2165,17 @@ def _llm_organise(articles: list[Article], company: Company, cfg: Config):
     cached = _CACHE.get_bullet(key, provider, model)
     if cached == _UNUSABLE:
         raise ValueError("model gave an unusable grouping for these bullets before")
-    txt = cached or _llm_complete(prompt, cfg, max_tokens=500)
+    txt = cached or _llm_complete(prompt, cfg, max_tokens=700, schema=GROUPS_SCHEMA)
     try:
-        m = re.search(r"\[.*\]", txt, re.S)
-        if not m:
-            raise ValueError("no JSON in response")
-        data = json.loads(m.group(0))
-        flat = sorted(int(n) for g in data for n in g["members"])
-        if flat != list(range(1, len(articles) + 1)):
-            raise ValueError("grouping does not cover every bullet exactly once")
+        parsed = _parse_groups(txt, len(articles))
     except (ValueError, TypeError, KeyError) as e:   # JSONDecodeError is a ValueError
         if not cached:
             _CACHE.put_bullet(key, provider, model, _UNUSABLE)
         raise ValueError(f"unusable grouping: {e}") from e
     if not cached:
         _CACHE.put_bullet(key, provider, model, txt)
-    groups = []
-    for g in data:
-        members = [articles[int(n) - 1] for n in g["members"]]
-        groups.append((str(g.get("heading", "")).strip(),
-                       str(g.get("summary", "")).strip(), members))
-    return groups
+    _REPORT.count("topic grouping: AI (cached)" if cached else "topic grouping: AI")
+    return [(h, s, [articles[i - 1] for i in members]) for h, s, members in parsed]
 
 
 def _heuristic_organise(articles: list[Article], company: Company, cfg: Config):
@@ -2033,6 +2206,7 @@ def organise(articles: list[Article], company: Company, cfg: Config) -> list[Art
         try:
             groups = _llm_organise(news, company, cfg)
         except Exception:
+            _REPORT.count("topic grouping: rule-based")
             groups = _heuristic_organise(news, company, cfg)
 
     out = []
@@ -2041,6 +2215,13 @@ def organise(articles: list[Article], company: Company, cfg: Config) -> list[Art
             continue
         rep = _pick_representative(members)
         rep.heading = heading or ""
+        if summary and summary != rep.bullet and cfg.verify_figures:
+            # A merged summary may only use figures from its own members.
+            source = "\n".join(f"{m.headline}\n{m.bullet}\n{m.snippet}\n{m.body[: cfg.max_article_chars]}"
+                               for m in members)
+            if unsupported_figures(summary, source):
+                _REPORT.count("summaries: replaced by number check")
+                summary = ""
         if summary:
             rep.bullet = _tidy_bullet(summary)
         rep.extra_sources = []
@@ -2076,6 +2257,62 @@ def _fallback_bullet(a: Article) -> str:
     return _tidy_bullet(lead or a.headline)
 
 
+# ----------------------------------------------------------------------------
+# Number check: every figure in an AI-written bullet must come from the source.
+# A small model can invent or garble a number ("£40m" -> "£400m", "18%" -> "81%"),
+# which is the worst possible error in an investor brief. Bullets that fail are
+# replaced by the article's own sentences, and never cached.
+# ----------------------------------------------------------------------------
+_SCALES = {"k": 1e3, "thousand": 1e3, "m": 1e6, "mn": 1e6, "mln": 1e6, "million": 1e6,
+           "bn": 1e9, "b": 1e9, "billion": 1e9, "tn": 1e12, "trillion": 1e12}
+_FIGURE_RE = re.compile(
+    r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?"
+    r"(?:\s?(k|thousand|mn|mln|m|million|bn|b|billion|tn|trillion)\b)?"
+    r"(\s?(?:%|percent\b|per\s?cent\b|pct\b|percentage points?\b|pp\b))?", re.I)
+
+
+def _figures(text: str) -> list[tuple]:
+    """(value, decimals, scale, literal) for each number in the text."""
+    out = []
+    for m in _FIGURE_RE.finditer(text or ""):
+        whole, frac, unit, pct = m.groups()
+        num = float(whole.replace(",", "") + ("." + frac if frac else ""))
+        scale = _SCALES.get((unit or "").lower(), 1.0)
+        out.append((num * scale, len(frac or ""), scale, num, bool(pct), bool(unit)))
+    return out
+
+
+def unsupported_figures(bullet: str, source: str) -> list[str]:
+    """Figures in `bullet` that can't be found in `source`. A figure is supported if
+    the source has the same number, or one that rounds to it at the bullet's
+    precision in the bullet's unit ("£40.3m" supports "£40m"; "£1,234 million"
+    supports "£1.2bn"). Small bare integers (1-9) are ignored: sources often
+    spell them out ("three new contracts")."""
+    src = _figures(source)
+    bad = []
+    for value, dec, scale, num, pct, has_unit in _figures(bullet):
+        if not pct and not has_unit and num.is_integer() and num < 10:
+            continue
+        ok = False
+        for s_value, _, _, s_num, s_pct, _ in src:
+            if pct != s_pct and (pct or s_pct):
+                continue   # 18% is not supported by "18 stores"
+            if abs(s_value - value) <= 1e-9 * max(1.0, abs(value)) or s_num == num:
+                ok = True
+                break
+            if round(s_value / scale, dec) == round(num, dec):
+                ok = True
+                break
+        if not ok:
+            m = f"{num:g}" + ("%" if pct else "")
+            bad.append(m)
+    return bad
+
+
+def _bullet_source(a: "Article", content: str) -> str:
+    return f"{a.headline}\n{a.snippet}\n{content}"
+
+
 _BART_PIPE = None
 
 
@@ -2105,8 +2342,30 @@ def _bart_summarise(text: str, cfg: Config) -> str:
     return _tidy_bullet(out[0]["summary_text"])
 
 
-def _llm_complete(prompt: str, cfg: Config, max_tokens: int = 160) -> str:
-    """Single LLM call with a hard timeout. Raises on failure (caller falls back)."""
+def _openai_chat(client, model: str, prompt: str, cfg: Config, max_tokens: int, schema: dict | None) -> str:
+    kw = dict(model=model, max_tokens=max_tokens, timeout=cfg.llm_timeout,
+              messages=[{"role": "user", "content": prompt}])
+    if schema is not None:
+        # Constrained decoding: the server can only emit JSON matching `schema`.
+        # Supported by OpenAI and by Ollama >= 0.5; anything that rejects it is
+        # retried once as a plain call (the parser still validates the answer).
+        name = schema.get("title", "answer")
+        body = {k: v for k, v in schema.items() if k != "title"}
+        try:
+            r = client.chat.completions.create(**kw, response_format={
+                "type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": body}})
+            return (r.choices[0].message.content or "").strip()
+        except Exception as e:
+            if e.__class__.__name__ in ("APITimeoutError", "APIConnectionError"):
+                raise
+    r = client.chat.completions.create(**kw)
+    return (r.choices[0].message.content or "").strip()
+
+
+def _llm_complete(prompt: str, cfg: Config, max_tokens: int = 160, schema: dict | None = None) -> str:
+    """Single LLM call with a hard timeout. Raises on failure (caller falls back).
+    With `schema`, the answer is constrained to that JSON schema where the
+    provider supports it (Ollama, OpenAI)."""
     p = cfg.llm_provider.lower()
     if p == "bart":
         raise RuntimeError("bart provider is summarise-only; use _bart_summarise")
@@ -2115,10 +2374,7 @@ def _llm_complete(prompt: str, cfg: Config, max_tokens: int = 160) -> str:
             raise RuntimeError("openai package not installed")
         client = OpenAI(base_url=cfg.ollama_base_url, api_key="ollama",
                         timeout=cfg.llm_timeout, max_retries=0)
-        r = client.chat.completions.create(model=cfg.ollama_model, max_tokens=max_tokens,
-                                           timeout=cfg.llm_timeout,
-                                           messages=[{"role": "user", "content": prompt}])
-        return r.choices[0].message.content.strip()
+        return _openai_chat(client, cfg.ollama_model, prompt, cfg, max_tokens, schema)
     if p == "openai":
         if OpenAI is None:
             raise RuntimeError("openai package not installed")
@@ -2126,10 +2382,7 @@ def _llm_complete(prompt: str, cfg: Config, max_tokens: int = 160) -> str:
             raise RuntimeError("OPENAI_API_KEY is not set")
         client = OpenAI(api_key=env_key("OPENAI_API_KEY"),
                         timeout=cfg.llm_timeout, max_retries=0)
-        r = client.chat.completions.create(model=cfg.openai_model, max_tokens=max_tokens,
-                                           timeout=cfg.llm_timeout,
-                                           messages=[{"role": "user", "content": prompt}])
-        return r.choices[0].message.content.strip()
+        return _openai_chat(client, cfg.openai_model, prompt, cfg, max_tokens, schema)
     if p == "anthropic":
         if anthropic is None:
             raise RuntimeError("anthropic package not installed")
@@ -2150,17 +2403,36 @@ def summarise_bullet(a: Article, company: Company, cfg: Config) -> str:
     if not content or len(content) < 60:
         return _fallback_bullet(a)
     provider, model, key = cfg.llm_provider.lower(), _model_name(cfg), _orig_key(a)
+    source = _bullet_source(a, content[: cfg.max_article_chars])
+
+    def checked(text: str, fresh: bool) -> str:
+        """Number check, then cache. A bullet with a figure the article doesn't
+        contain is replaced by the article's own sentences and never cached."""
+        if not text:
+            _REPORT.count("bullets: fallback (empty answer)")
+            return _fallback_bullet(a)
+        bad = unsupported_figures(text, source) if cfg.verify_figures else []
+        if bad:
+            print(f"      number check: {', '.join(bad[:3])} not in the article — "
+                  f"using the article's own sentences ({a.headline[:50]}...)")
+            _REPORT.count("bullets: replaced by number check")
+            return _fallback_bullet(a)
+        if fresh:
+            _CACHE.put_bullet(key, provider, model, text)
+        _REPORT.count("bullets: AI (cached)" if not fresh else "bullets: AI")
+        return text
+
     cached = _CACHE.get_bullet(key, provider, model)
     if cached:
-        return cached
+        return checked(cached, fresh=False)
     if provider == "bart":
         try:
             text = _bart_summarise(content[: cfg.max_article_chars], cfg)
         except Exception as e:
             print(f"      BART bullet failed ({e.__class__.__name__}) — using fallback")
+            _REPORT.count("bullets: fallback (model unavailable)")
             return _fallback_bullet(a)
-        _CACHE.put_bullet(key, provider, model, text)
-        return text or _fallback_bullet(a)
+        return checked(text, fresh=True)
     prompt = (
         f'Summarise this news about "{company.name}" as ONE concise bullet point '
         f"(one or two sentences, max ~40 words) for an investor deciding whether the "
@@ -2168,16 +2440,18 @@ def summarise_bullet(a: Article, company: Company, cfg: Config) -> str:
         f"materially relevant: earnings, revenue, margins, M&A, contracts/orders, "
         f"capacity or market expansion, guidance, leadership, regulatory or competitive "
         f"positioning. Ignore marketing, discounts, promotions and consumer offers. No "
-        f"preamble, no 'the article', no links, no bullet character.\n\n"
+        f"preamble, no 'the article', no links, no bullet character. Use only figures "
+        f"(amounts, percentages, dates) exactly as they appear in the text; never "
+        f"calculate, convert or estimate a number.\n\n"
         f"HEADLINE: {a.headline}\n\n{content[: cfg.max_article_chars]}"
     )
     try:
         text = _tidy_bullet(_llm_complete(prompt, cfg))
     except Exception as e:
         print(f"      LLM bullet failed ({e.__class__.__name__}) — using fallback")
+        _REPORT.count("bullets: fallback (LLM unreachable)")
         return _fallback_bullet(a)   # fallbacks are never cached, so a later run retries the LLM
-    _CACHE.put_bullet(key, provider, model, text)
-    return text or _fallback_bullet(a)
+    return checked(text, fresh=True)
 
 
 # ============================================================================
@@ -2440,10 +2714,48 @@ def _published_keys(a: Article) -> list[str]:
     return [k for k in keys if k]
 
 
+def _open_log(cfg: Config):
+    """Log file for this run: <output_dir>/logs/news digest YYYY-MM-DD HHMMSS.log."""
+    log_dir = os.path.join(cfg.output_dir, "logs") if cfg.log_dir is None else cfg.log_dir
+    if not log_dir:
+        return None
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, f"news digest {datetime.now():%Y-%m-%d %H%M%S}.log")
+        return open(path, "w", encoding="utf-8")
+    except OSError as e:
+        print(f"(no log file: {e})")
+        return None
+
+
 def run(cfg: Config) -> list[str]:
     """Run the whole digest. Returns the paths written (empty if nothing to publish).
+    The run's health is in the module-level _REPORT afterwards (see RunReport);
+    everything printed also goes to a log file."""
+    global _REPORT
+    _REPORT = RunReport()
+    log = _open_log(cfg)
+    real_stdout = sys.stdout
+    if log:
+        sys.stdout = _Tee(real_stdout, log)
+    try:
+        try:
+            return _run_pipeline(cfg)
+        except Exception as e:
+            _REPORT.fatal = f"crashed: {e.__class__.__name__}: {e}"
+            raise
+        finally:
+            print("\n" + "\n".join(_REPORT.lines()))
+            if log:
+                print(f"  Log : {log.name}")
+    finally:
+        sys.stdout = real_stdout
+        if log:
+            log.close()
 
-    Work happens in phases, each spread over a small thread pool:
+
+def _run_pipeline(cfg: Config) -> list[str]:
+    """Work happens in phases, each spread over a small thread pool:
       1. discover + pre-filter every company     (cfg.discovery_workers)
       2. extract every candidate: cache -> HTTP -> Chrome
       3. summarise every kept story               (cfg.llm_workers)
@@ -2467,10 +2779,12 @@ def run(cfg: Config) -> list[str]:
         companies = load_companies(cfg)
     except (WatchlistError, OSError, json.JSONDecodeError) as e:
         print(f"Watchlist problem: {e}\nRun with --check to see how the file is being read.")
+        _REPORT.fatal = f"watchlist problem: {e}"
         return []
     print(f"  -> {len(companies)} companies: {', '.join(c.name for c in companies)}\n")
     if not companies:
         print("No companies found for the selected tiers. Run with --check to see what the watchlist holds.")
+        _REPORT.fatal = "no companies for the selected tiers"
         return []
 
     _CACHE = Cache(cfg.cache_path if cfg.use_cache else None)
@@ -2494,6 +2808,15 @@ def run(cfg: Config) -> list[str]:
             candidates[id(c)] = cands
             print(f"   {c.name}: discovered {n_raw} -> {len(cands)} candidates")
         t = lap("discover", t)
+        n_found = sum(n for n, _ in found)
+        _REPORT.count("stories discovered", n_found)
+        if not n_found:
+            # Every source came back empty for every company: almost always a
+            # Google consent / rate-limit page or no network, not a quiet week.
+            _REPORT.fatal = ("no stories from any source for any company (Google consent page, "
+                             "rate limit or no network? try a run without --headless)")
+            print("No stories found at all.")
+            return []
 
         # 2. Extract every candidate of every company in one go.
         everything = [a for c in companies for a in candidates[id(c)]]
@@ -2501,6 +2824,8 @@ def run(cfg: Config) -> list[str]:
         stats = extract_all(everything, cfg)
         print(f"   {stats['cached']} from cache, {stats['http']} via HTTP, "
               f"{stats['browser']} via Chrome, {stats['unreadable']} unreadable")
+        _REPORT.count("articles read", stats["cached"] + stats["http"] + stats["browser"])
+        _REPORT.count("articles unreadable", stats["unreadable"])
         t = lap("extract", t)
 
         # 3. Pick what to summarise: readable, not blocklisted now that the real
@@ -2782,8 +3107,16 @@ def main() -> int:
         return 0
     if cfg.check_only:
         return check_watchlist(cfg)
-    run(cfg)
-    return 0
+    try:
+        run(cfg)
+    except KeyboardInterrupt:
+        print("\nStopped. Everything read so far is cached; run again to continue.")
+        return EXIT_FAILED
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return EXIT_FAILED
+    return _REPORT.exit_code()
 
 
 if __name__ == "__main__":

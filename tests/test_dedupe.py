@@ -1,6 +1,8 @@
 """Dedupe (step 4) and topic grouping / merging (organise)."""
 import json
 
+import pytest
+
 
 def test_dedupe_collapses_same_url_and_near_identical_titles(nd, cfg, make_article):
     a = make_article(headline="Acme Widgets wins £40m contract", url="https://www.reuters.com/x?utm_source=a")
@@ -51,13 +53,13 @@ def test_organise_single_article_skips_llm(nd, cfg, make_article, monkeypatch):
 
 def test_organise_uses_llm_grouping_when_valid(nd, cfg, make_article, monkeypatch):
     co = nd.Company(name="Acme Widgets Plc")
-    a = make_article(url="https://www.reuters.com/a", bullet="Acme won a contract.")
+    a = make_article(url="https://www.reuters.com/a", bullet="Acme won a £40m defence contract.")
     b = make_article(url="https://example.com/b", bullet="Acme named a new CFO.")
     reply = json.dumps([
         {"heading": "Contracts", "members": [1], "summary": "acme won a £40m defence contract"},
         {"heading": "Leadership", "members": [2], "summary": "Acme appointed Jo Smith as CFO"},
     ])
-    monkeypatch.setattr(nd, "_llm_complete", lambda prompt, cfg, max_tokens=160: "Sure!\n" + reply)
+    monkeypatch.setattr(nd, "_llm_complete", lambda prompt, cfg, max_tokens=160, **kw: "Sure!\n" + reply)
     out = nd.organise([a, b], co, cfg)
     assert [(x.heading, x.bullet) for x in out] == [
         ("Contracts", "acme won a £40m defence contract."),
@@ -65,14 +67,43 @@ def test_organise_uses_llm_grouping_when_valid(nd, cfg, make_article, monkeypatc
     ]
 
 
-def test_llm_organise_rejects_incomplete_grouping(nd, cfg, make_article, monkeypatch):
+def test_llm_organise_repairs_a_grouping_that_forgets_a_bullet(nd, cfg, make_article, monkeypatch):
     co = nd.Company(name="Acme Widgets Plc")
     arts = [make_article(bullet="one."), make_article(bullet="two.")]
     monkeypatch.setattr(nd, "_llm_complete",
-                        lambda *a, **k: '[{"heading": "x", "members": [1], "summary": "s"}]')
-    try:
-        nd._llm_organise(arts, co, cfg)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for a grouping that skips bullet 2")
+                        lambda *a, **k: '{"groups": [{"heading": "x", "members": [1], "summary": "s"}]}')
+    groups = nd._llm_organise(arts, co, cfg)
+    assert [(h, s, [arts.index(m) for m in ms]) for h, s, ms in groups] == [("x", "s", [0]), ("", "", [1])]
+
+
+@pytest.mark.parametrize("answer,expected", [
+    # repeated / out-of-range numbers dropped; that group's summary dropped with them
+    ('{"groups": [{"heading": "A", "members": [1, 2], "summary": "AB"},'
+     ' {"heading": "B", "members": [2, 9], "summary": "B9"}, {"heading": "C", "members": [3], "summary": "C"}]}',
+     [("A", "AB", [1, 2]), ("C", "C", [3])]),
+    # bare list (older format, or a provider without schema support) with prose around it
+    ('Sure! [{"heading": "A", "members": ["1", 2, 3], "summary": "all"}] Hope that helps.',
+     [("A", "all", [1, 2, 3])]),
+])
+def test_parse_groups_repairs_small_slips(nd, answer, expected):
+    assert nd._parse_groups(answer, 3) == expected
+
+
+@pytest.mark.parametrize("answer", [
+    "no json", "[[1, 2, 3]]", '{"groups": "x"}', '{"groups": [{"heading": "A"}]}',
+    '{"groups": [{"heading": "A", "members": [1], "summary": ""}]}',   # places 1 of 3
+])
+def test_parse_groups_rejects_unusable_answers(nd, answer):
+    with pytest.raises(ValueError):
+        nd._parse_groups(answer, 3)
+
+
+def test_merged_summary_with_invented_figure_is_not_used(nd, cfg, make_article, monkeypatch):
+    co = nd.Company(name="Acme Widgets Plc")
+    a = make_article(url="https://www.reuters.com/a", bullet="Acme won a £40m defence contract.")
+    b = make_article(url="https://example.com/b", bullet="Acme's defence contract is worth £40m.")
+    reply = '{"groups": [{"heading": "Contracts", "members": [1, 2], "summary": "Acme won a £400m deal."}]}'
+    monkeypatch.setattr(nd, "_llm_complete", lambda *x, **k: reply)
+    out = nd.organise([a, b], co, cfg)
+    assert len(out) == 1 and "£400m" not in out[0].bullet and "£40m" in out[0].bullet
+    assert nd._REPORT.counts["summaries: replaced by number check"] == 1

@@ -40,6 +40,7 @@ def nd(monkeypatch):
     monkeypatch.setattr(_ND, "_FINNHUB_SYMBOL_CACHE", {})
     monkeypatch.setattr(_ND, "_FINNHUB_DISABLED", False)
     monkeypatch.setattr(_ND, "_SEC_UA_WARNED", False)
+    monkeypatch.setattr(_ND, "_REPORT", _ND.RunReport())
     monkeypatch.setattr(_ND, "_BART_PIPE", None)
     monkeypatch.setattr(_ND, "_CACHE", _ND.Cache(None))       # caching off unless a test opts in
     monkeypatch.setattr(_ND.time, "sleep", lambda s: None)    # retries / polite delays: no waiting

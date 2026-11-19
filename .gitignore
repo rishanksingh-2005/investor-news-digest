@@ -22,6 +22,7 @@ NLP/
 news digest *.pdf
 news digest *.docx
 *.log
+logs/
 # run cache (feeds, extracted articles, LLM bullets, published history)
 digest_cache.sqlite*
 *.sqlite-journal

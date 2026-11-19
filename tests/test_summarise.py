@@ -43,7 +43,7 @@ def test_summarise_bullet_falls_back_when_llm_unreachable(nd, cfg, make_article,
 def test_summarise_bullet_tidies_llm_output(nd, cfg, make_article, monkeypatch):
     seen = {}
 
-    def fake(prompt, cfg, max_tokens=160):
+    def fake(prompt, cfg, max_tokens=160, **kw):
         seen["prompt"] = prompt
         return "- Acme raised FY guidance to £1.2bn ,  citing record orders"
 
