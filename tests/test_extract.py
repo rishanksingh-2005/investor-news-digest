@@ -88,7 +88,7 @@ def test_extract_all_routes_each_article(nd, cfg, make_article, http_pages, brow
     stats = nd.extract_all([google, direct, paywalled, filing], cfg)
 
     assert browser == [google, paywalled]          # HTTP read 'direct'; Chrome gets the rest
-    assert stats == {"cached": 0, "http": 1, "browser": 2, "unreadable": 0}
+    assert stats == {"cached": 0, "http": 1, "browser": 2, "unreadable": 0, "redated": 0}
     assert direct.authentic and filing.authentic
 
 

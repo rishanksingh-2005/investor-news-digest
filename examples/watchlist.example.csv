@@ -1,6 +1,6 @@
-Company,Ticker,Exchange,Country,Currency,Tier
-Apple Inc.,AAPL,NASDAQ,US,USD,1
-Unilever PLC,ULVR,LSE,UK,GBp,1
-Shopify Inc.,SHOP,TSX,CA,CAD,2
-ASML Holding N.V.,ASML,Euronext Amsterdam,NL,EUR,2
-Rolls-Royce Holdings plc,RR.,LSE,UK,GBp,3
+Company,Ticker,Exchange,Country,Currency,Tier,Aliases,Exclude
+Apple Inc.,AAPL,NASDAQ,US,USD,1,Apple,Apple Records; Big Apple
+Unilever PLC,ULVR,LSE,UK,GBp,1,,
+Shopify Inc.,SHOP,TSX,CA,CAD,2,,
+ASML Holding N.V.,ASML,Euronext Amsterdam,NL,EUR,2,ASML,
+Rolls-Royce Holdings plc,RR.,LSE,UK,GBp,3,Rolls-Royce,Rolls-Royce Motor Cars; Rolls-Royce Phantom; Rolls-Royce Cullinan

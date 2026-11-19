@@ -50,7 +50,7 @@ import urllib.parse
 import urllib.request
 import email.utils
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 # Third-party (install via requirements.txt)
@@ -124,6 +124,8 @@ class Config:
     use_regulated: bool = True           # per-exchange official/regulated market feeds
     use_sec_edgar: bool = True           # US SEC filings (US-listed names only)
     use_finnhub: bool = True             # Finnhub company-news; needs FINNHUB_API_KEY (North America only on free tier)
+    use_gdelt: bool = False              # GDELT global news index (free, no key; --gdelt)
+    gdelt_min_interval: float = 6.0      # seconds between GDELT requests (GDELT asks for >= 5)
 
     # Selenium
     headless: bool = False
@@ -156,9 +158,11 @@ class Config:
 
     # Dedup / merge thresholds (higher = stricter, fewer things treated as dup)
     title_similarity: float = 0.82       # stage 1: near-identical headline dedupe
-    merge_text_ratio: float = 0.58       # stage 2: same-event if bullet text this similar
+    merge_text_ratio: float = 0.7        # stage 2: same-event if bullet text this similar (0.58 merged
+                                         # "won a £1bn engine contract" with "won a £1bn reactor contract")
     merge_token_overlap: float = 0.42    # stage 2: OR shared-token (Jaccard) overlap
     merge_distinctive: int = 3           # stage 2: OR this many shared distinctive tokens
+    merge_headline_overlap: float = 0.6  # stage 2: OR headlines share this much (Jaccard)
 
     # LLM
     llm_provider: str = "ollama"         # "ollama" | "openai" | "anthropic" | "bart"
@@ -167,6 +171,10 @@ class Config:
     openai_model: str = "gpt-4o-mini"
     anthropic_model: str = "claude-sonnet-4-6"
     llm_timeout: int = 90
+    llm_retry_on_timeout: bool = True    # one retry with twice the timeout
+    llm_max_failures: int = 3            # consecutive timeouts/connection errors before the
+                                         # LLM is switched off for the rest of the run
+    ollama_keep_alive: str = "30m"       # keep the model loaded between calls (warm-up)
 
     # Local BART summariser (facebook/bart-large-cnn in the NLP folder). Only used
     # when llm_provider == "bart"; it writes the per-article bullet. It can't follow
@@ -535,6 +543,7 @@ class Article:
     snippet: str = ""       # short feed description (fallback text)
     body: str = ""          # extracted full text (read from the article's <div>s)
     authentic: bool = False # True only if a real, readable article body was found
+    page_published: str = ""  # publication date the article page itself states (ISO), if any
     bullet: str = ""        # one-line summary for the digest
     extra_sources: list = field(default_factory=list)  # merged duplicate sources
     heading: str = ""       # topic sub-heading this point sits under
@@ -549,6 +558,8 @@ class Company:
     tier: int = 0
     ticker: str = ""
     country: str = ""       # "US", "UK", ... (used when the exchange is unknown)
+    aliases: list = field(default_factory=list)   # other names it's reported under ("Jet2")
+    exclude: list = field(default_factory=list)   # terms that mean a story is NOT about it
     articles: list = field(default_factory=list)
     note: str = ""
 
@@ -587,7 +598,19 @@ WATCHLIST_COLUMNS = {
     "currency": ["currency", "ccy", "tradingcurrency"],
     "country": ["country", "countryofrisk", "domicile", "region", "countrycode"],
     "tier": ["tier", "priority", "group", "bucket", "level", "rank"],
+    "aliases": ["aliases", "alias", "alsoknownas", "aka", "othernames", "alternativenames", "tradingnames"],
+    "exclude": ["exclude", "excludeterms", "exclusions", "negativekeywords", "notabout", "ignoreterms"],
 }
+
+
+def _split_terms(v) -> list[str]:
+    """'Jet2; Jet2.com | Jet2 plc' -> ['Jet2', 'Jet2.com', 'Jet2 plc']. Only ; and |
+    separate terms, because company names themselves contain commas."""
+    if isinstance(v, (list, tuple)):
+        items = [str(x) for x in v]
+    else:
+        items = re.split(r"[;|\n]", _cell(v))
+    return list(dict.fromkeys(t.strip() for t in items if t and t.strip()))
 
 # Exchange names people actually type -> MIC.
 EXCHANGE_ALIASES = {
@@ -801,6 +824,8 @@ def read_watchlist(cfg: Config) -> tuple[list[Company], dict]:
             exchange=normalise_exchange(get(r, "exchange")),
             ticker=_cell(get(r, "ticker")),
             country=normalise_country(get(r, "country")),
+            aliases=[a for a in _split_terms(get(r, "aliases")) if a.lower() != name.lower()],
+            exclude=_split_terms(get(r, "exclude")),
         ))
     return out, report
 
@@ -849,10 +874,10 @@ def check_watchlist(cfg: Config) -> int:
 
 
 WATCHLIST_TEMPLATE = [
-    ["Company", "Ticker", "Exchange", "Country", "Currency", "Tier"],
-    ["Apple Inc.", "AAPL", "XNAS", "US", "USD", 1],
-    ["Unilever PLC", "ULVR", "XLON", "UK", "GBp", 2],
-    ["Shopify Inc.", "SHOP", "XTSE", "CA", "CAD", 3],
+    ["Company", "Ticker", "Exchange", "Country", "Currency", "Tier", "Aliases", "Exclude"],
+    ["Apple Inc.", "AAPL", "XNAS", "US", "USD", 1, "Apple", "Apple Records; Big Apple"],
+    ["Unilever PLC", "ULVR", "XLON", "UK", "GBp", 2, "", ""],
+    ["Shopify Inc.", "SHOP", "XTSE", "CA", "CAD", 3, "", ""],
 ]
 
 
@@ -950,6 +975,10 @@ class Cache:
             self._db = sqlite3.connect(path, check_same_thread=False, timeout=30)
             with self._lock:
                 self._db.executescript(self.SCHEMA)
+                # caches created before the page-date column existed
+                cols = {r[1] for r in self._db.execute("PRAGMA table_info(articles)")}
+                if "published" not in cols:
+                    self._db.execute("ALTER TABLE articles ADD COLUMN published TEXT DEFAULT ''")
                 self._prune()
 
     @property
@@ -987,19 +1016,19 @@ class Cache:
     def get_article(self, key: str, max_age_s: float, failed_max_age_s: float) -> dict | None:
         if not key:
             return None
-        row = self._q("SELECT final_url, body, authentic, fetched_at FROM articles WHERE key = ?",
+        row = self._q("SELECT final_url, body, authentic, fetched_at, published FROM articles WHERE key = ?",
                       (key,), one=True)
         if not row:
             return None
         age = time.time() - row[3]
         if age > (max_age_s if row[2] else failed_max_age_s):
             return None
-        return {"final_url": row[0], "body": row[1], "authentic": bool(row[2])}
+        return {"final_url": row[0], "body": row[1], "authentic": bool(row[2]), "published": row[4] or ""}
 
-    def put_article(self, key: str, final_url: str, body: str, authentic: bool) -> None:
+    def put_article(self, key: str, final_url: str, body: str, authentic: bool, published: str = "") -> None:
         if key:
-            self._q("INSERT OR REPLACE INTO articles VALUES (?, ?, ?, ?, ?)",
-                    (key, final_url, body, int(authentic), time.time()))
+            self._q("INSERT OR REPLACE INTO articles (key, final_url, body, authentic, fetched_at, published) "
+                    "VALUES (?, ?, ?, ?, ?, ?)", (key, final_url, body, int(authentic), time.time(), published))
 
     # bullets --------------------------------------------------------------------
     def get_bullet(self, key: str, provider: str, model: str) -> str | None:
@@ -1211,14 +1240,23 @@ def _google_news_rss(query: str, cfg: Config, origin: str, source_override=None)
     return out
 
 
+def _name_query(company: Company, quoted: bool = True) -> str:
+    """The company's search term, with any aliases OR'ed in: ("Jet2 Plc" OR "Jet2")."""
+    names = _names(company)
+    if len(names) == 1:
+        return f'"{names[0]}"' if quoted else names[0]
+    return "(" + " OR ".join(f'"{n}"' for n in names) + ")"
+
+
 def discover_google_news(company: Company, cfg: Config) -> list[Article]:
-    return _google_news_rss(f'{company.name} when:{cfg.days_back}d', cfg, "Google News")
+    return _google_news_rss(f"{_name_query(company, quoted=False)} when:{cfg.days_back}d",
+                            cfg, "Google News")
 
 
 def discover_trusted(company: Company, cfg: Config) -> list[Article]:
     """Seek the same news specifically from a basket of trusted outlets."""
     sites = " OR ".join(f"site:{s}" for s in TRUSTED_SITES)
-    query = f'"{company.name}" ({sites}) when:{cfg.days_back}d'
+    query = f"{_name_query(company)} ({sites}) when:{cfg.days_back}d"
     return _google_news_rss(query, cfg, "Trusted outlets")
 
 
@@ -1232,7 +1270,7 @@ def discover_regulated(company: Company, cfg: Config) -> list[Article]:
     if not sites:
         return []
     site_filter = " OR ".join(f"site:{s}" for s in sites)
-    query = f'"{company.name}" ({site_filter}) when:{cfg.days_back}d'
+    query = f"{_name_query(company)} ({site_filter}) when:{cfg.days_back}d"
     return _google_news_rss(query, cfg, origin=f"Official / regulated ({company.exchange})")
 
 
@@ -1490,6 +1528,89 @@ def discover_finnhub(company: Company, cfg: Config) -> list[Article]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# GDELT (optional): a free, key-less global news index. Its links point straight
+# at the publisher, so they're read over plain HTTP (no Chrome) and it doesn't
+# depend on Google. GDELT allows one request every 5 s per client and answers a
+# faster client with HTTP 429 or a plain-text notice, so requests are spaced
+# out across all threads and the source switches itself off after repeated 429s.
+# ---------------------------------------------------------------------------
+GDELT_API = "https://api.gdeltproject.org/api/v2/doc/doc"
+_GDELT_LOCK = threading.Lock()
+_GDELT_LAST = [0.0]           # time of the last request (shared by all threads)
+_GDELT_STATE = {"disabled": False, "rate_limited": 0}
+
+
+def _gdelt_wait(cfg: Config) -> None:
+    with _GDELT_LOCK:
+        gap = cfg.gdelt_min_interval - (time.time() - _GDELT_LAST[0])
+        if gap > 0:
+            time.sleep(gap)
+        _GDELT_LAST[0] = time.time()
+
+
+def _gdelt_rate_limited(company: Company) -> list:
+    _GDELT_STATE["rate_limited"] += 1
+    _REPORT.source("GDELT", "error", "rate-limited (429)")
+    if _GDELT_STATE["rate_limited"] >= 2 and not _GDELT_STATE["disabled"]:
+        _GDELT_STATE["disabled"] = True
+        print("      [GDELT] rate-limited twice — skipping GDELT for the rest of this run")
+    return []
+
+
+def discover_gdelt(company: Company, cfg: Config) -> list[Article]:
+    if _GDELT_STATE["disabled"]:
+        return []
+    names = _names(company)[:4]
+    q = " OR ".join(f'"{n}"' for n in names)
+    q = (f"({q})" if len(names) > 1 else q) + " sourcelang:english"
+    url = GDELT_API + "?" + urllib.parse.urlencode({
+        "query": q, "mode": "artlist", "format": "json", "sort": "datedesc",
+        "maxrecords": max(10, cfg.max_items_per_source * 2), "timespan": f"{cfg.days_back}d"})
+    raw = _CACHE.get_feed(url, cfg.feed_cache_minutes * 60)
+    if raw is None:
+        _gdelt_wait(cfg)
+        req = urllib.request.Request(url, headers={"User-Agent": "news-digest/1.0", "Accept": "application/json"})
+        try:
+            raw = urllib.request.urlopen(req, timeout=30).read()
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                return _gdelt_rate_limited(company)
+            print(f"      [GDELT] failed: {e}")
+            _REPORT.source("GDELT", "error", str(e))
+            return []
+        except Exception as e:
+            print(f"      [GDELT] failed: {e}")
+            _REPORT.source("GDELT", "error", str(e))
+            return []
+        text = raw.decode("utf-8", "replace").lstrip()
+        if not text.startswith("{"):
+            if "limit requests" in text.lower():
+                return _gdelt_rate_limited(company)
+            print(f"      [GDELT] unexpected reply: {text[:80]!r}")
+            _REPORT.source("GDELT", "error", "unexpected reply")
+            return []
+        _CACHE.put_feed(url, raw)
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError as e:
+        _REPORT.source("GDELT", "error", f"bad JSON: {e}")
+        return []
+    _GDELT_STATE["rate_limited"] = 0
+    _REPORT.source("GDELT", "ok")
+    out, seen = [], set()
+    for it in data.get("articles") or []:
+        title, link = (it.get("title") or "").strip(), (it.get("url") or "").strip()
+        if not title or not link or link in seen:
+            continue
+        seen.add(link)
+        out.append(Article(headline=title, url=link, source=(it.get("domain") or "").strip(),
+                           origin="GDELT", published=_iso_date(it.get("seendate"))))
+        if len(out) >= cfg.max_items_per_source:
+            break
+    return out
+
+
 def discover(company: Company, cfg: Config) -> list[Article]:
     steps = [
         (cfg.use_google_news, discover_google_news),
@@ -1497,6 +1618,7 @@ def discover(company: Company, cfg: Config) -> list[Article]:
         (cfg.use_regulated, discover_regulated),
         (cfg.use_sec_edgar, discover_sec_edgar),
         (cfg.use_finnhub, discover_finnhub),
+        (cfg.use_gdelt, discover_gdelt),
     ]
     found = []
     for i, (enabled, fn) in enumerate(s for s in steps if s[0]):
@@ -1551,6 +1673,67 @@ def _extract_article_text(page: str, url: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+# Where publishers state an article's publication date, most reliable first.
+_DATE_META = [
+    ("property", "article:published_time"), ("name", "article:published_time"),
+    ("itemprop", "datePublished"), ("property", "og:article:published_time"),
+    ("name", "parsely-pub-date"), ("name", "sailthru.date"), ("name", "pubdate"),
+    ("name", "publishdate"), ("name", "publish-date"), ("name", "publication_date"),
+    ("name", "dc.date.issued"), ("name", "dcterms.created"), ("name", "date"),
+]
+
+
+def _iso_date(value) -> str:
+    """A plausible publication datetime as ISO with a timezone, else ''."""
+    dt = _parse_dt(str(value or "").strip())
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if dt > now + timedelta(days=1) or dt.year < 1995:
+        return ""
+    return dt.isoformat()
+
+
+def _jsonld_dates(node):
+    if isinstance(node, dict):
+        if "datePublished" in node:
+            yield node["datePublished"]
+        for v in node.values():
+            yield from _jsonld_dates(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _jsonld_dates(v)
+
+
+def page_published(page: str) -> str:
+    """The publication date an article page states about itself (meta tags,
+    JSON-LD, <time>), as ISO, or ''. Google News feed dates are sometimes the
+    date a story was re-indexed; the page's own date is the truth."""
+    try:
+        soup = BeautifulSoup(page or "", "html.parser")
+    except Exception:
+        return ""
+    for attr, val in _DATE_META:
+        el = soup.find("meta", attrs={attr: re.compile(rf"^{re.escape(val)}$", re.I)})
+        iso = _iso_date(el.get("content")) if el else ""
+        if iso:
+            return iso
+    for s in soup.find_all("script", attrs={"type": re.compile("ld\\+json", re.I)}):
+        try:
+            data = json.loads(s.string or s.get_text() or "")
+        except ValueError:
+            continue
+        for v in _jsonld_dates(data):
+            iso = _iso_date(v)
+            if iso:
+                return iso
+    el = soup.find("time", attrs={"itemprop": re.compile("datePublished", re.I)}) or \
+        soup.find("time", attrs={"datetime": True})
+    return _iso_date(el.get("datetime")) if el else ""
+
+
 def _is_authentic(text: str) -> bool:
     """Authentic = a real, readable article body — not a paywall / consent /
     login stub or a near-empty shell. Such pages are left out (not summarised)."""
@@ -1598,6 +1781,7 @@ def extract_body(driver, article: Article, cfg: Config) -> Article:
 
     article.body = _clean_body(_extract_article_text(page, article.final_url))[: cfg.max_article_chars]
     article.authentic = _is_authentic(article.body)
+    article.page_published = page_published(page)
     return article
 
 
@@ -1646,6 +1830,7 @@ def extract_http(article: Article, cfg: Config) -> bool:
     if not _is_authentic(body):
         return False
     article.final_url, article.body, article.authentic = final, body, True
+    article.page_published = page_published(page)
     return True
 
 
@@ -1720,6 +1905,7 @@ def extract_all(articles: list[Article], cfg: Config) -> dict:
         if hit is not None:
             a.final_url = hit["final_url"] or a.final_url
             a.body, a.authentic = hit["body"] or "", hit["authentic"]
+            a.page_published = hit.get("published", "")
             stats["cached"] += 1
             continue
         todo.append(a)
@@ -1738,10 +1924,28 @@ def extract_all(articles: list[Article], cfg: Config) -> dict:
     stats["browser"] = sum(1 for a in slow if a.authentic)
 
     for a in todo:
-        _CACHE.put_article(_orig_key(a), a.final_url, a.body if a.authentic else "", a.authentic)
+        _CACHE.put_article(_orig_key(a), a.final_url, a.body if a.authentic else "", a.authentic,
+                           a.page_published)
         if not a.authentic:
             stats["unreadable"] += 1
+    stats["redated"] = sum(apply_page_date(a) for a in articles)
     return stats
+
+
+def apply_page_date(a: Article) -> bool:
+    """Trust the date the article page states over the feed's date when they
+    disagree by more than a day (feeds sometimes carry the re-index date, so an
+    old story looks new). Returns True if the date was corrected."""
+    page_dt, feed_dt = _parse_dt(a.page_published), _parse_dt(a.published)
+    if page_dt is None:
+        return False
+    if feed_dt is not None:
+        page_dt = page_dt if page_dt.tzinfo else page_dt.replace(tzinfo=timezone.utc)
+        feed_dt = feed_dt if feed_dt.tzinfo else feed_dt.replace(tzinfo=timezone.utc)
+        if abs((page_dt - feed_dt).total_seconds()) <= 86400:
+            return False
+    a.published = a.page_published
+    return True
 
 
 # ============================================================================
@@ -1775,14 +1979,38 @@ def is_relevant(a: Article, company: Company) -> bool:
         return False
     if not RELEVANCE_RX.search(full):
         return False
-    toks = _company_tokens(company.name)
+    # the company (by name, alias or ticker) should appear in the headline/lead,
+    # not just buried deep in the body (kills articles that merely mention it).
+    return (any(_name_mentioned(n, lead, full) for n in _names(company))
+            or ticker_mentioned(f"{a.headline} {a.snippet}", company))
+
+
+def _names(company: Company) -> list[str]:
+    return [company.name] + [x for x in company.aliases if x]
+
+
+def _name_mentioned(name: str, lead: str, full: str) -> bool:
+    toks = _company_tokens(name)
     distinctive = [t for t in toks if len(t) >= 5] or toks
-    # the distinctive company name should appear in the headline/lead, not just
-    # buried deep in the body (kills off-topic articles that merely mention it).
-    if not any(_has_word(t, lead) for t in distinctive):
-        if sum(1 for t in set(toks) if _has_word(t, full)) < 2:
-            return False
-    return True
+    if any(_has_word(t, lead) for t in distinctive):
+        return True
+    return len(set(toks)) >= 2 and sum(1 for t in set(toks) if _has_word(t, full)) >= 2
+
+
+def ticker_mentioned(text: str, company: Company) -> bool:
+    """The ticker written as a ticker in the ORIGINAL-case text: "XPEL", "$PLOW",
+    "(NASDAQ: PLOW)". Only tickers of 3+ letters count; shorter ones ("RR", "BA")
+    collide with ordinary words and initials."""
+    t = _clean_ticker(company.ticker).split(".")[0]
+    if len(t) < 3 or not t.isalpha():
+        return False
+    return re.search(rf"(?<![A-Za-z0-9])\$?{re.escape(t)}(?![A-Za-z0-9])", text or "") is not None
+
+
+def is_excluded(text: str, company: Company) -> bool:
+    """True if the text mentions one of the company's exclude terms, e.g.
+    "Rolls-Royce Motor Cars" for Rolls-Royce Holdings (a different company)."""
+    return any(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text or "", re.I) for term in company.exclude)
 
 
 def _has_word(token: str, text: str) -> bool:
@@ -1796,12 +2024,47 @@ def _has_word(token: str, text: str) -> bool:
 # must be matched as a full phrase, or common articles that merely contain "north"
 # leak in as false positives.
 GENERIC_NAME_WORDS = {
-    "north", "south", "east", "west", "northern", "southern", "eastern",
-    "western", "central", "world", "global", "united", "national",
-    "international", "american", "british", "european", "general", "standard",
-    "first", "great", "royal", "modern", "premier", "prime", "value", "smart",
-    "direct", "future", "capital", "century", "pacific", "metro", "greater",
+    # places / directions
+    "north", "south", "east", "west", "northern", "southern", "eastern", "western", "central",
+    "world", "global", "united", "national", "international", "american", "british", "european",
+    "atlantic", "pacific", "metro", "greater", "london", "switzerland", "america", "britain",
+    "canada", "europe", "texas", "california",
+    # descriptors
+    "general", "standard", "first", "great", "royal", "modern", "premier", "prime", "value",
+    "smart", "direct", "future", "capital", "century", "liberty", "union", "allied", "advanced",
+    "applied", "integrated", "consolidated", "associated", "universal", "dynamic", "strategic",
+    "creative", "quality", "superior", "precision", "specialty", "summit", "pioneer", "frontier",
+    # what companies do (common words that also appear in ordinary news)
+    "watches", "judges", "scientific", "security", "factory", "communications", "dynamics",
+    "entertainment", "systems", "technologies", "technology", "solutions", "services", "energy",
+    "resources", "industries", "partners", "products", "brands", "foods", "homes", "property",
+    "properties", "financial", "insurance", "media", "network", "networks", "software", "digital",
+    "health", "healthcare", "medical", "airlines", "airways", "motors", "engineering", "electric",
+    "electricity", "power", "water", "mining", "metals", "materials", "chemicals", "logistics",
+    "transport", "retail", "stores", "hotels", "leisure", "gaming", "sports", "fashion", "beauty",
+    "beverages", "brewing", "construction", "building", "estates", "investments", "trust",
+    "ventures", "research", "design", "studios", "pictures", "records", "music", "games",
+    "interactive", "mobile", "telecom", "wireless", "cloud", "analytics", "robotics", "aerospace",
+    "defence", "defense", "marine", "shipping", "automotive", "equipment", "machines", "tools",
+    "packaging", "paper", "plastics", "steel", "glass", "textiles", "apparel", "clothing",
+    "jewellery", "jewelry", "luxury", "diamond", "silver", "copper", "solar", "renewables",
+    "nuclear", "therapeutics", "pharmaceuticals", "diagnostics", "devices", "instruments",
+    "controls", "electronics", "semiconductor", "optical", "outdoor", "travel", "credit",
 }
+
+# Legal-form words dropped from the end of a name before phrase matching.
+_LEGAL_SUFFIXES = {"plc", "inc", "ltd", "limited", "group", "corp", "corporation", "co", "company",
+                   "holdings", "holding", "ab", "publ", "sa", "se", "ag", "nv", "the", "llc", "lp"}
+
+
+def _name_phrase(name: str) -> str:
+    """'Watches Of Switzerland Group Plc' -> 'watches of switzerland' (inner words kept)."""
+    words = _norm(name).split()
+    while words and words[-1] in _LEGAL_SUFFIXES:
+        words.pop()
+    while words and words[0] == "the":
+        words.pop(0)
+    return " ".join(words)
 
 
 def strongly_relevant(a: Article, company: Company) -> bool:
@@ -1820,27 +2083,55 @@ def strongly_relevant(a: Article, company: Company) -> bool:
     """
     if a.kind == "filing":
         return True
-    lead = _norm(f"{a.headline} {a.snippet}")
-    if not lead.strip():
+    # headline and snippet are checked separately, so a phrase can't be formed
+    # across the join ("...across the north west" + "Electricity was restored")
+    parts = [p for p in (_norm(a.headline), _norm(a.snippet)) if p.strip()]
+    if not parts:
         return False
-    toks = _company_tokens(company.name)
+    return (any(_strongly_named(n, p) for n in _names(company) for p in parts)
+            or ticker_mentioned(f"{a.headline} {a.snippet}", company))
+
+
+def _strongly_named(name: str, lead: str) -> bool:
+    """A distinctive word of the name (5+ letters, not a common word: "Xpel",
+    "Douglas", "Seaport") is enough on its own. A name made only of common words
+    ("Watches of Switzerland", "North West Electricity", "Liberty Capital") must
+    appear as the whole phrase, or every story about watches or the north west
+    would count. Short names people really use belong in the Aliases column."""
+    toks = _company_tokens(name)
     distinctive = [t for t in toks if len(t) >= 5 and t not in GENERIC_NAME_WORDS]
     if distinctive:
         return any(_has_word(t, lead) for t in distinctive)
-    phrase = " ".join(toks).strip()
+    phrase = _name_phrase(name) or " ".join(toks).strip()
     return bool(phrase) and re.search(rf"\b{re.escape(phrase)}\b", lead) is not None
 
 
 def _parse_dt(iso: str):
+    """ISO 8601, RFC 2822 (feeds) or compact 20261117T093000Z (GDELT) -> datetime."""
     if not iso:
         return None
+    iso = str(iso).strip()
+    m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})Z?", iso)
+    if m:
+        return datetime(*map(int, m.groups()), tzinfo=timezone.utc)
     try:
         return datetime.fromisoformat(iso.replace("Z", "+00:00"))
     except Exception:
+        pass
+    # Python 3.10's fromisoformat is strict: retry without fractional seconds
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?", iso)
+    if m:
+        tz = (m.group(3) or "+00:00").replace("Z", "+00:00")
+        if len(tz) == 5:
+            tz = tz[:3] + ":" + tz[3:]
         try:
-            return email.utils.parsedate_to_datetime(iso)
+            return datetime.fromisoformat(f"{m.group(1)}T{m.group(2)}{tz}")
         except Exception:
-            return None
+            pass
+    try:
+        return email.utils.parsedate_to_datetime(iso)
+    except Exception:
+        return None
 
 
 def is_recent(a: Article, cfg: Config) -> bool:
@@ -1872,7 +2163,8 @@ _IMP_PCT = re.compile(r"\d+(?:\.\d+)?\s?%")
 # a word, and short words must match whole ("order" not "border", "ceo" not in
 # other words, "fine" not "finance", "stake" not "stakeholder").
 _IMP_EVENTS = [re.compile(p) for p in [
-    r"\b(?:acquisition|acquir|merger|takeover|buyback|repurchas)",
+    r"\b(?:acquisition|acquir|merger|takeover|buyback|repurchas|bids?\b|recommended (?:cash )?offer"
+    r"|offer for|tender offer)",
     r"\b(?:dividend|guidance|outlook|profit warning)",
     r"\b(?:contracts?\b|orders?\b|ordered\b|order book|awarded|secured|mandates?\b|tenders?\b)",
     r"\b(?:eps\b|revenue|profit|ebitda|margin|earnings|net income|loss(?:es)?\b|pre-?tax)",
@@ -1948,6 +2240,9 @@ def filter_articles(articles: list[Article], company: Company, cfg: Config) -> l
     for a in articles:
         if is_blocklisted(a) or not is_relevant(a, company):
             continue
+        if a.kind != "filing" and is_excluded(f"{a.headline} {a.snippet}", company):
+            _REPORT.count("dropped: exclude term")
+            continue
         if not is_recent(a, cfg):
             continue
         if a.kind != "filing" and is_low_quality(f"{a.headline}  {a.snippet}"):
@@ -2006,6 +2301,29 @@ def _distinctive(tokens: set) -> set:
     return {t for t in tokens if len(t) >= 7 or any(ch.isdigit() for ch in t)}
 
 
+def _key_figures(text: str) -> set:
+    """The specific figures in a bullet, as comparable values: "£40m" and
+    "£40 million" are the same figure, "22%" and "22 percent" too. Small counts
+    (1-9) and bare years are left out: unrelated stories share those all the time."""
+    out = set()
+    for value, _dec, _scale, num, pct, has_unit in _figures(text):
+        if not pct and not has_unit and num.is_integer() and (num < 10 or 1900 <= num <= 2100):
+            continue
+        out.add((round(value, 4), pct))
+    return out
+
+
+def _headline_tokens(a: Article, company: Company) -> set:
+    ctoks = set(_company_tokens(company.name))
+    for alias in company.aliases:
+        ctoks |= set(_company_tokens(alias))
+    return {t for t in _norm(a.headline).split() if len(t) > 2 and t not in ctoks and t not in _MERGE_STOP}
+
+
+_MERGE_STOP = {"plc", "group", "the", "and", "its", "has", "will", "for", "with", "this", "that",
+               "from", "are", "new", "amid", "over", "after", "says", "said", "shares", "stock"}
+
+
 def _same_event(a: Article, b: Article, company: Company, cfg: Config) -> bool:
     if difflib.SequenceMatcher(None, (a.bullet or "").lower(),
                                (b.bullet or "").lower()).ratio() >= cfg.merge_text_ratio:
@@ -2016,6 +2334,20 @@ def _same_event(a: Article, b: Article, company: Company, cfg: Config) -> bool:
             return True
         if len(_distinctive(ta) & _distinctive(tb)) >= cfg.merge_distinctive:
             return True
+    # Same figures = same announcement, however differently it's worded:
+    # "US sales rose 22%, guidance now 7-10%" vs "US revenue jumped 22 percent;
+    # sees growth of up to 10%". Two shared figures, or one plus a shared word.
+    shared = _key_figures(a.bullet) & _key_figures(b.bullet)
+    if len(shared) >= 2:
+        return True
+    # words, not the figures again ("1bn" is the shared figure, not a second clue)
+    words = {t for t in (_distinctive(ta) & _distinctive(tb)) if not any(ch.isdigit() for ch in t)}
+    if shared and len(words) >= 2:   # one figure + one word isn't enough: two £1bn contracts
+        return True
+    # Near-identical headlines (the outlets' own framing of the story).
+    ha, hb = _headline_tokens(a, company), _headline_tokens(b, company)
+    if len(ha) >= 3 and len(hb) >= 3 and len(ha & hb) / len(ha | hb) >= cfg.merge_headline_overlap:
+        return True
     return False
 
 
@@ -2362,10 +2694,87 @@ def _openai_chat(client, model: str, prompt: str, cfg: Config, max_tokens: int, 
     return (r.choices[0].message.content or "").strip()
 
 
+class _LLMHealth:
+    """Circuit breaker for the LLM. Timeouts and connection errors in a row trip
+    it, after which calls fail instantly for the rest of the run (and bullets use
+    the article's own sentences) instead of each story waiting out the timeout."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.failures = 0
+        self.tripped = False
+
+    def ok(self):
+        with self._lock:
+            self.failures = 0
+
+    def fail(self, cfg: Config):
+        with self._lock:
+            self.failures += 1
+            if not self.tripped and self.failures >= max(1, cfg.llm_max_failures):
+                self.tripped = True
+                print(f"      LLM failed {self.failures} times in a row — switching it off for the rest "
+                      f"of this run (bullets will use the articles' own sentences)")
+                _REPORT.warn(f"LLM switched off after {self.failures} consecutive failures")
+
+
+_LLM_STATE = _LLMHealth()
+
+
+def _is_timeout(e: Exception) -> bool:
+    return isinstance(e, TimeoutError) or "Timeout" in e.__class__.__name__
+
+
+def _is_unreachable(e: Exception) -> bool:
+    return (_is_timeout(e) or isinstance(e, (ConnectionError, urllib.error.URLError))
+            or e.__class__.__name__ in ("APIConnectionError", "ConnectError"))
+
+
+def warm_up_llm(cfg: Config) -> threading.Thread | None:
+    """Ask Ollama to load the model now (in the background) and keep it loaded,
+    so the first summary doesn't pay a 30-60 s cold start. Best effort."""
+    if cfg.llm_provider.lower() != "ollama":
+        return None
+    base = re.sub(r"/v1/?$", "", cfg.ollama_base_url.rstrip("/"))
+    body = json.dumps({"model": cfg.ollama_model, "keep_alive": cfg.ollama_keep_alive}).encode()
+
+    def go():
+        try:
+            req = urllib.request.Request(base + "/api/generate", data=body,
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=max(cfg.llm_timeout, 120)).read()
+        except Exception:
+            pass   # Ollama not running: the doctor / the first real call will say so
+
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    return t
+
+
 def _llm_complete(prompt: str, cfg: Config, max_tokens: int = 160, schema: dict | None = None) -> str:
-    """Single LLM call with a hard timeout. Raises on failure (caller falls back).
-    With `schema`, the answer is constrained to that JSON schema where the
-    provider supports it (Ollama, OpenAI)."""
+    """One LLM call with a hard timeout, one retry on timeout, and the circuit
+    breaker. Raises on failure (callers fall back to non-LLM output)."""
+    if _LLM_STATE.tripped:
+        raise RuntimeError("LLM switched off for this run after repeated failures")
+    try:
+        out = _llm_call(prompt, cfg, max_tokens, schema)
+    except Exception as e:
+        if _is_timeout(e) and cfg.llm_retry_on_timeout:
+            try:
+                out = _llm_call(prompt, replace(cfg, llm_timeout=cfg.llm_timeout * 2), max_tokens, schema)
+                _LLM_STATE.ok()
+                return out
+            except Exception as e2:
+                e = e2
+        if _is_unreachable(e):
+            _LLM_STATE.fail(cfg)
+        raise e
+    _LLM_STATE.ok()
+    return out
+
+
+def _llm_call(prompt: str, cfg: Config, max_tokens: int = 160, schema: dict | None = None) -> str:
+    """Single provider call. With `schema`, the answer is constrained to that JSON
+    schema where the provider supports it (Ollama, OpenAI)."""
     p = cfg.llm_provider.lower()
     if p == "bart":
         raise RuntimeError("bart provider is summarise-only; use _bart_summarise")
@@ -2732,8 +3141,10 @@ def run(cfg: Config) -> list[str]:
     """Run the whole digest. Returns the paths written (empty if nothing to publish).
     The run's health is in the module-level _REPORT afterwards (see RunReport);
     everything printed also goes to a log file."""
-    global _REPORT
+    global _REPORT, _LLM_STATE
     _REPORT = RunReport()
+    _LLM_STATE = _LLMHealth()
+    _GDELT_STATE.update(disabled=False, rate_limited=0)
     log = _open_log(cfg)
     real_stdout = sys.stdout
     if log:
@@ -2821,11 +3232,14 @@ def _run_pipeline(cfg: Config) -> list[str]:
         # 2. Extract every candidate of every company in one go.
         everything = [a for c in companies for a in candidates[id(c)]]
         print(f"[2/5] Reading {len(everything)} articles ...")
+        warm_up_llm(cfg)   # model loads while we read, ready for step 3
         stats = extract_all(everything, cfg)
         print(f"   {stats['cached']} from cache, {stats['http']} via HTTP, "
               f"{stats['browser']} via Chrome, {stats['unreadable']} unreadable")
         _REPORT.count("articles read", stats["cached"] + stats["http"] + stats["browser"])
         _REPORT.count("articles unreadable", stats["unreadable"])
+        if stats["redated"]:
+            _REPORT.count("dates corrected from article page", stats["redated"])
         t = lap("extract", t)
 
         # 3. Pick what to summarise: readable, not blocklisted now that the real
@@ -2833,8 +3247,12 @@ def _run_pipeline(cfg: Config) -> list[str]:
         # redirect), optionally not already published, capped per company.
         selected = {}
         for c in companies:
+            # is_recent again: the page's own date (step 2) may show an old story
             kept = [a for a in candidates[id(c)]
-                    if (a.kind == "filing" or a.authentic) and not is_blocklisted(a)]
+                    if (a.kind == "filing" or a.authentic) and not is_blocklisted(a) and is_recent(a, cfg)]
+            stale = sum(1 for a in candidates[id(c)] if a.authentic and not is_recent(a, cfg))
+            if stale:
+                _REPORT.count("dropped: old story (page date)", stale)
             if cfg.new_only:
                 kept = [a for a in kept if not _CACHE.was_published(_orig_key(a), _url_key(a))]
             selected[id(c)] = kept[: cfg.max_articles_per_company]
@@ -2851,7 +3269,7 @@ def _run_pipeline(cfg: Config) -> list[str]:
         def finish(c):
             kept = [a for a in selected[id(c)] if a.kind == "filing"
                     or (not is_low_quality(a.bullet) and is_material(a.bullet, cfg)
-                        and strongly_relevant(a, c))]
+                        and strongly_relevant(a, c) and not is_excluded(a.bullet, c))]
             for a in kept:
                 a.importance = importance_score(a.bullet)
             return organise(kept, c, cfg)
@@ -2922,6 +3340,9 @@ def parse_args() -> Config:
     p.add_argument("--finnhub", action=argparse.BooleanOptionalAction,
                    default=cfg.use_finnhub, dest="use_finnhub",
                    help="Finnhub news (North America; needs FINNHUB_API_KEY)")
+    p.add_argument("--gdelt", action=argparse.BooleanOptionalAction,
+                   default=cfg.use_gdelt, dest="use_gdelt",
+                   help="GDELT global news index (free, no key; ~6 s per company)")
     p.add_argument("--sec", action=argparse.BooleanOptionalAction,
                    default=cfg.use_sec_edgar, dest="use_sec_edgar",
                    help="SEC EDGAR filings (US-listed names)")
@@ -2952,6 +3373,7 @@ def parse_args() -> Config:
     cfg.headless = a.headless
     cfg.use_trusted_sites = a.use_trusted_sites
     cfg.use_finnhub = a.use_finnhub
+    cfg.use_gdelt = a.use_gdelt
     cfg.use_sec_edgar = a.use_sec_edgar
     cfg.use_cache = a.use_cache
     cfg.new_only = a.new_only
@@ -3071,6 +3493,15 @@ def doctor(cfg: Config) -> int:
                                    "or remove it / use --no-finnhub")
         else:
             say("WARN", "Finnhub", f"test failed: {code}")
+
+    # GDELT (optional, off by default)
+    if cfg.use_gdelt:
+        code = _probe(GDELT_API + "?query=%22annual%20results%22&mode=artlist&format=json&maxrecords=1"
+                      "&timespan=1d", {"User-Agent": "news-digest/1.0"}, timeout=30)
+        say("OK" if code == 200 else "WARN", "GDELT",
+            "reachable" if code == 200 else
+            ("rate-limited right now (429): GDELT allows one request per 5 s per client" if code == 429
+             else f"test failed: {code}"))
 
     # SEC EDGAR (US listings)
     ua = os.environ.get("SEC_USER_AGENT", "").strip().strip("\"'").strip()

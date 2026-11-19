@@ -54,7 +54,8 @@ def test_organise_single_article_skips_llm(nd, cfg, make_article, monkeypatch):
 def test_organise_uses_llm_grouping_when_valid(nd, cfg, make_article, monkeypatch):
     co = nd.Company(name="Acme Widgets Plc")
     a = make_article(url="https://www.reuters.com/a", bullet="Acme won a £40m defence contract.")
-    b = make_article(url="https://example.com/b", bullet="Acme named a new CFO.")
+    b = make_article(url="https://example.com/b", headline="Acme names Jo Smith finance chief",
+                     bullet="Acme named a new CFO.")
     reply = json.dumps([
         {"heading": "Contracts", "members": [1], "summary": "acme won a £40m defence contract"},
         {"heading": "Leadership", "members": [2], "summary": "Acme appointed Jo Smith as CFO"},

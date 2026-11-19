@@ -41,6 +41,10 @@ def nd(monkeypatch):
     monkeypatch.setattr(_ND, "_FINNHUB_DISABLED", False)
     monkeypatch.setattr(_ND, "_SEC_UA_WARNED", False)
     monkeypatch.setattr(_ND, "_REPORT", _ND.RunReport())
+    monkeypatch.setattr(_ND, "_LLM_STATE", _ND._LLMHealth())
+    monkeypatch.setattr(_ND, "_GDELT_STATE", {"disabled": False, "rate_limited": 0})
+    monkeypatch.setattr(_ND, "_GDELT_LAST", [0.0])
+    monkeypatch.setattr(_ND, "warm_up_llm", lambda cfg: None)   # never call a real Ollama
     monkeypatch.setattr(_ND, "_BART_PIPE", None)
     monkeypatch.setattr(_ND, "_CACHE", _ND.Cache(None))       # caching off unless a test opts in
     monkeypatch.setattr(_ND.time, "sleep", lambda s: None)    # retries / polite delays: no waiting

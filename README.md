@@ -45,6 +45,11 @@ Only step 5 uses AI. Everything else is plain code and public feeds.
 - **SEC EDGAR**: the company's own recent filings (8-K, 10-Q, …), for US listings only.
 - **Finnhub**: company news for North American listings. Optional, and needs a
   free API key; it's skipped automatically without one.
+- **GDELT** (optional, `--gdelt`): a free global news index that needs no key. It
+  doesn't depend on Google, and its links go straight to the publisher, so they're
+  read without Chrome. GDELT allows one request every 5 seconds, so it adds about
+  6 seconds per company, and it switches itself off for the run if GDELT keeps
+  rate-limiting. Off by default.
 
 **Quality gates.** A story only reaches the report if it comes from a
 non-blocklisted source, names the company in its headline or lead, carries a
@@ -58,7 +63,11 @@ material are left out of the report.
 Every Tier-1 company keeps its best item.
 
 If the chosen LLM is unreachable, the run never hangs: it falls back to an
-offline summary built from the article's own lead sentences.
+offline summary built from the article's own lead sentences. With Ollama, the
+model is loaded in the background while articles are being read, so the first
+summary doesn't wait for a cold start. A timed-out call is retried once with
+twice the time limit. After 3 failures in a row the LLM is switched off for the
+rest of the run, so every remaining story doesn't wait out the timeout.
 
 **Accuracy safeguards**
 
@@ -78,6 +87,29 @@ offline summary built from the article's own lead sentences.
   (Ollama and OpenAI support this). Small slips are repaired instead of the
   whole answer being thrown away: a forgotten story becomes its own point, and a
   repeated one is dropped.
+- **Names, aliases, tickers.** A distinctive word of the name ("Xpel", "Douglas")
+  is enough to match. A name made only of common words ("Watches of Switzerland",
+  "North West Electricity", "Liberty Capital") must appear as the whole phrase,
+  so a review of "the best watches of the year" doesn't count. Short names and
+  former names go in the watchlist's **Aliases** column. A ticker of 3 or more
+  letters written in capitals also counts (`PLOW`, `$PLOW`, `(NYSE: PLOW)`).
+  The **Exclude** column drops stories about a different company with a similar
+  name (for example "Rolls-Royce Motor Cars" for Rolls-Royce Holdings).
+- **The article's own date.** Feed dates are sometimes the date a story was
+  re-indexed, so an old story can look new. The date the article page gives in its
+  own metadata is used instead whenever the two differ by more than a day, and
+  stories that turn out to be old are dropped.
+- **Duplicate detection by figures.** Two write-ups that share two specific
+  figures ("22%" and "10%") are the same announcement, however differently
+  they're worded. One shared figure isn't enough: two different £1bn contracts
+  stay separate. Near-identical headlines are merged as well.
+
+**Measured accuracy.** `eval/golden.json` holds hand-labelled cases: which
+stories to keep for which company, which bullets have unsupported figures, and
+which pairs are the same event. `python eval/evaluate.py` scores the rules
+against them and lists every miss. The test suite (and therefore CI) fails if a
+change makes any score drop below its threshold. Current scores: relevance 96%,
+figures 100%, duplicates 90%. Add a case whenever you spot a real mistake.
 
 **Run report and exit codes**
 
@@ -202,8 +234,10 @@ don't matter):
 | tier | Tier, Priority, Group, Bucket | Selecting tiers (`1`, `1.0`, `Tier 1`, `T1`, `P1` all work). No tier column: every company is Tier 1. |
 | exchange | Exchange, MIC, Market, Listing, Venue | Picks the official news sources. MIC codes (`XLON`) or common names (`NASDAQ`, `NYSE`, `LSE`, `AIM`, `TSX`, `ASX`, `Euronext Paris`, …). |
 | country | Country, Domicile, Region | Used when the exchange is missing (`US` turns on SEC filings, `US`/`CA` Finnhub). |
-| ticker | Ticker, Symbol, EPIC | Kept with the company. |
+| ticker | Ticker, Symbol, EPIC | Finnhub lookups; a 3+ letter ticker in capitals in a headline counts as a mention. |
 | currency | Currency, CCY | Shown in the report. |
+| aliases | Aliases, Alias, AKA, Other Names, Trading Names | Other names the company is reported under (`Jet2; Jet2.com`). Also searched for. Separate with `;` or `\|`. |
+| exclude | Exclude, Exclusions, Negative Keywords | Terms meaning a story is about something else (`Rolls-Royce Motor Cars; Phantom`). |
 
 Other columns are ignored. Spreadsheet error values such as `#VALUE!` and `#N/A`
 count as empty, and duplicate company names are dropped.
@@ -314,6 +348,7 @@ A large watchlist (100+ companies) takes a while on the first run. Use
 | `--no-trusted` | Skip the trusted-outlets search. |
 | `--no-sec` | Skip SEC EDGAR filings. |
 | `--no-finnhub` | Skip Finnhub. |
+| `--gdelt` | Also search GDELT (free, no key, about 6 s per company). |
 | `--new-only` | Leave out stories already published in an earlier digest. |
 | `--no-cache` | Don't read or write the cache; fetch everything fresh. |
 | `--browsers N` | Chrome windows to run in parallel (default 3). |
@@ -342,7 +377,10 @@ Everything else lives in the `Config` dataclass at the top of `news digest.py`:
 | `use_*` | on | Toggle each discovery source. |
 | `llm_provider` | `ollama` | Default summariser. |
 | `ollama_model` / `openai_model` / `anthropic_model` | `llama3.2:3b` / `gpt-4o-mini` / `claude-sonnet-4-6` | Model per provider. |
-| `title_similarity`, `merge_*` | — | Dedupe / merge strictness. |
+| `title_similarity`, `merge_*` | — | Dedupe / merge strictness (`merge_text_ratio` 0.7, `merge_headline_overlap` 0.6). |
+| `use_gdelt`, `gdelt_min_interval` | off, 6 s | GDELT source and the spacing between its requests. |
+| `llm_retry_on_timeout`, `llm_max_failures` | on, 3 | Retry a timed-out call once; switch the LLM off after this many failures in a row. |
+| `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded after the warm-up. |
 | `polite_delay` | 1.0 s | Pause between requests, so sites aren't hammered. |
 | `discovery_workers` | 3 | Companies searched at once (Google rate-limits much above this). |
 | `http_workers` / `browser_workers` / `llm_workers` | 8 / 3 / 2 | Parallel HTTP fetches / Chrome windows / LLM calls. |
@@ -389,7 +427,9 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 | A key in `.env` seems ignored | A variable already set in your system environment takes priority over `.env`. Remove the old one, or open a new terminal. |
 | ChromeDriver errors | Update Chrome; Selenium 4 matches the driver automatically. |
 | `can't open file … news digest.py` | Wrong folder, or the name isn't quoted. It has a space: `"news digest.py"`. |
-| A company you expected is missing | It was filtered (price chatter / promo / admin filler), or nothing readable passed in the window. Try `--days 21`. |
+| A company you expected is missing | It was filtered (price chatter / promo / admin filler), or nothing readable passed in the window. Try `--days 21`. If it's usually called by a short name ("WOSG", "Rolls-Royce"), add that to its Aliases column. |
+| Stories about a different company with a similar name | Add the other company's name to the Exclude column. |
+| `[GDELT] rate-limited twice` | GDELT allows one request every 5 seconds per client, and sometimes blocks a busy connection for longer. The run carries on without it. |
 | `pip` not recognised (Windows) | Use `python -m pip …` with the venv active. |
 | Results look stale, or a fixed page still shows as unreadable | Run once with `--no-cache`, or delete `digest_cache.sqlite`. |
 | `feed failed: HTTP Error 429` | Google is rate-limiting. Lower `discovery_workers` to 1–2. |
@@ -406,7 +446,8 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # ~235 tests, a few seconds
+python -m pytest          # ~275 tests, a few seconds
+python eval/evaluate.py   # accuracy scores on the labelled cases, with every miss
 ruff check .              # lint
 ```
 
@@ -434,6 +475,7 @@ requirements-bart.txt   optional local BART summariser
 requirements-dev.txt    test + lint tools
 pyproject.toml          pytest and ruff settings
 tests/                  offline test suite (+ fixtures/)
+eval/                   labelled accuracy cases (golden.json) and the scorer
 .github/workflows/      CI
 .env.example            template for API keys (copy to .env)
 NLP/                    optional local BART model (not in git)
@@ -448,7 +490,12 @@ LICENSE                 MIT
 - Paywalled outlets (FT, WSJ, Bloomberg) often fail the readable-body check, so
   the same story is usually taken from a free outlet instead.
 - Relevance and noise filters are keyword rules: they're fast and transparent,
-  but they aren't perfect.
+  but they aren't perfect. `python eval/evaluate.py` shows the known misses. For
+  example, a company whose distinctive word is also an ordinary one ("Gamma")
+  still matches "gamma ray" stories until you add an Exclude term.
+- The duplicate check can't tell that two differently worded stories with no
+  shared figures are the same event (for example "CEO to step down" and "boss to
+  retire"). The LLM grouping step is what catches those.
 - The number check verifies figures, not meaning. A bullet can quote only real
   numbers and still misstate what they refer to.
 - With the default 3B local model, topic grouping is always valid JSON but not
