@@ -54,5 +54,18 @@ jobs:
       - name: Run tests (offline — no Chrome, LLM or network needed)
         run: python -m pytest
 
-      - name: CLI smoke check
+      - name: Accuracy scores on the labelled cases
+        run: python eval/evaluate.py --quiet
+
+      - name: CLI smoke check (source checkout)
         run: python "news digest.py" --help
+
+      - name: Install as a package and run the newsdigest command
+        shell: bash
+        run: |
+          python -m pip install .
+          cd "$RUNNER_TEMP"
+          newsdigest --help
+          newsdigest --init-watchlist watchlist.csv
+          newsdigest --init-config config.yaml
+          newsdigest --check

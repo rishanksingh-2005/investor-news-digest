@@ -196,7 +196,7 @@ def test_watchlist_problem_is_a_failed_run(nd, cfg, tmp_path):
 
 def test_main_returns_the_run_exit_code(nd, monkeypatch):
     cfg = nd.Config()
-    monkeypatch.setattr(nd, "parse_args", lambda: cfg)
+    monkeypatch.setattr(nd, "parse_args", lambda argv=None: cfg)
 
     def fake_run(c):
         nd._REPORT.source("SEC EDGAR", "error", "HTTP 500")

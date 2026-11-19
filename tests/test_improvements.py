@@ -3,7 +3,6 @@ merging, LLM resilience, GDELT, and the labelled evaluation set."""
 import importlib.util
 import io
 import json
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -214,19 +213,15 @@ def test_non_network_errors_do_not_trip_the_breaker(nd, cfg):
     assert not nd._LLM_STATE.tripped
 
 
-def test_warm_up_only_for_ollama(monkeypatch):
-    # conftest stubs warm_up_llm; load a fresh copy of the real function here
-    spec = importlib.util.spec_from_file_location("nd_warm", ROOT / "news digest.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["nd_warm"] = mod
-    spec.loader.exec_module(mod)
+def test_warm_up_only_for_ollama(nd, monkeypatch, real_warm_up):
+    # conftest stubs warm_up_llm for every test; `real_warm_up` is the real one
     sent = []
-    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append(req) or io.BytesIO(b"{}"))
-    cfg = mod.Config()
+    monkeypatch.setattr(nd.urllib.request, "urlopen", lambda req, timeout=None: sent.append(req) or io.BytesIO(b"{}"))
+    cfg = nd.Config()
     cfg.llm_provider = "anthropic"
-    assert mod.warm_up_llm(cfg) is None
+    assert real_warm_up(cfg) is None
     cfg.llm_provider = "ollama"
-    mod.warm_up_llm(cfg).join(5)
+    real_warm_up(cfg).join(5)
     assert sent[0].full_url == "http://localhost:11434/api/generate"
     assert json.loads(sent[0].data) == {"model": cfg.ollama_model, "keep_alive": cfg.ollama_keep_alive}
 

@@ -1,0 +1,103 @@
+# News digest settings. Uncomment a line (remove the leading '# ') to change it.
+# Any setting not listed here keeps its default. Command-line flags override this file.
+# API keys don't go here: they live in .env (see .env.example).
+
+# Input / output
+# Watchlist: .xlsx / .csv / .tsv / .json / .txt (see load_companies). Default:
+# $WATCHLIST, else watchlist.* or "Company List.xlsx" in the project folder.
+watchlist: watchlist.xlsx
+# sheet_name: null    # Excel sheet; None = first sheet with a name column
+# column_map: {}    # {"name": "Issuer", "tier": "Priority"}
+# default_tier: 1    # tier for companies when the file has no tier column
+# output_dir: .
+tiers: [1, 2, 3]    # which tiers to include (combined digest)
+
+# Recency / volume
+days_back: 14    # discovery window (quality-first, not a hard 7-day cut)
+# recency_grace_days: 21    # soft recency: keep strong stories up to this age
+# max_items_per_source: 8
+# max_articles_per_company: 2    # cap per company (page budget)
+# max_article_chars: 7000
+# max_total_items: 40    # global cap across the digest (~8 pages; tune this)
+# min_importance: 1    # drop items carrying no material signal
+
+# Sources on/off
+# use_google_news: true
+# use_trusted_sites: true
+# use_regulated: true    # per-exchange official/regulated market feeds
+# use_sec_edgar: true    # US SEC filings (US-listed names only)
+# use_finnhub: true    # Finnhub company-news; needs FINNHUB_API_KEY (North America only on free tier)
+# use_gdelt: false    # GDELT global news index (free, no key; --gdelt)
+# gdelt_min_interval: 6.0    # seconds between GDELT requests (GDELT asks for >= 5)
+
+# Selenium
+# headless: false
+# page_load_timeout: 20
+# resolve_wait: 8
+# polite_delay: 1.0
+
+# Speed: work is done in phases, each spread over a small thread pool.
+# discovery_workers: 3    # companies searched at once (Google rate-limits above ~3)
+# http_workers: 8    # plain-HTTP article fetches at once
+# browser_workers: 3    # Chrome windows at once (only for links that need one)
+# llm_workers: 2    # summaries in flight (Ollama queues extras anyway)
+# http_fast_path: true    # try plain HTTP before Chrome for non-Google links
+
+# Cache (SQLite). Makes reruns fast and a crashed run resumable: feeds,
+# extracted articles and LLM bullets are reused instead of fetched again.
+# use_cache: true
+# cache_path: digest_cache.sqlite
+# feed_cache_minutes: 60    # reuse a search result for this long
+# article_cache_days: 30    # reuse an extracted article for this long
+# failed_article_retry_hours: 24    # retry unreadable / paywalled pages after this
+# new_only: false    # skip stories already published in an earlier digest
+
+# Email delivery (optional): send the PDF + DOCX after each run. The mail
+# password goes in .env as SMTP_PASSWORD, never in this file.
+# email_to: []    # recipients; empty = don't email
+# email_from: ''    # sender address (default: smtp_user)
+# email_subject: News digest {date}    # placeholders: {date} {tiers} {companies} {items}
+# email_attach_docx: true    # attach the Word file as well as the PDF
+# email_when_empty: false    # also email a short note when nothing was published
+# smtp_host: ''    # e.g. smtp.gmail.com, smtp.office365.com
+# smtp_port: 587    # 587 with starttls, 465 with ssl
+# smtp_security: starttls    # "starttls" | "ssl" | "none"
+# smtp_user: ''    # login name (usually your email address)
+
+# Accuracy / run health
+# verify_figures: true    # replace AI bullets whose numbers aren't in the article
+# log_dir: null    # run logs; None = "<output_dir>/logs", "" = no log file
+
+# Dedup / merge thresholds (higher = stricter, fewer things treated as dup)
+# title_similarity: 0.82    # stage 1: near-identical headline dedupe
+# merge_text_ratio: 0.7    # stage 2: same-event if bullet text this similar (0.58 merged
+#                              "won a £1bn engine contract" with "won a £1bn reactor contract")
+# merge_token_overlap: 0.42    # stage 2: OR shared-token (Jaccard) overlap
+# merge_distinctive: 3    # stage 2: OR this many shared distinctive tokens
+# merge_headline_overlap: 0.6    # stage 2: OR headlines share this much (Jaccard)
+
+# LLM
+llm_provider: ollama    # "ollama" | "openai" | "anthropic" | "bart"
+# ollama_model: llama3.2:3b
+# ollama_base_url: http://localhost:11434/v1
+# openai_model: gpt-4o-mini
+# anthropic_model: claude-sonnet-4-6
+# llm_timeout: 90
+# llm_retry_on_timeout: true    # one retry with twice the timeout
+# llm_max_failures: 3    # consecutive timeouts/connection errors before the
+#                              LLM is switched off for the rest of the run
+# ollama_keep_alive: 30m    # keep the model loaded between calls (warm-up)
+
+# Local BART summariser (facebook/bart-large-cnn in the NLP folder). Only used
+# when llm_provider == "bart"; it writes the per-article bullet. It can't follow
+# instructions or emit JSON, so topic grouping falls back to the heuristic.
+# If the NLP folder is missing (e.g. a fresh clone — the weights are not in git)
+# the model is downloaded from the Hugging Face hub instead.
+# bart_model_dir: NLP
+# bart_hub_id: facebook/bart-large-cnn
+# bart_min_tokens: 18
+# bart_max_tokens: 60
+# bart_max_input_words: 800
+
+# Finnhub ticker map (name -> symbol)
+# finnhub_tickers: {}

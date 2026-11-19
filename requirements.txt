@@ -5,6 +5,7 @@ trafilatura>=1.8
 reportlab>=4.0
 python-docx>=1.1
 python-dotenv>=1.0
+pyyaml>=6.0
 
 # LLM summariser clients:
 #   openai    -> required for the default "ollama" provider (OpenAI-compatible

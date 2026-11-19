@@ -45,3 +45,12 @@ Google Alert - Daily Digest*.pdf
 Thumbs.db
 .vscode/
 .idea/
+
+# --- Customer settings (the repo ships examples/config.example.yaml) --------
+/config.yaml
+/config.yml
+
+# --- Packaging build output ---------------------------------------------------
+build/
+dist/
+*.egg-info/

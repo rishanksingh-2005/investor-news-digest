@@ -15,7 +15,7 @@ def test_env_example_has_no_values():
 
 def test_gitignore_covers_secrets_and_client_data():
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    for pattern in (".env", "Company List.xlsx", "/watchlist.*", "digest_cache.sqlite*", "NLP/"):
+    for pattern in (".env", "Company List.xlsx", "/watchlist.*", "digest_cache.sqlite*", "NLP/", "/config.yaml"):
         assert pattern in ignored, f"{pattern} missing from .gitignore"
 
 

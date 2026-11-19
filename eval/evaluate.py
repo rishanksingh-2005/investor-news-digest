@@ -15,7 +15,7 @@ change that makes the rules worse. Add a case whenever you find a real mistake.
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import types
 import json
 import sys
 from pathlib import Path
@@ -25,11 +25,15 @@ GOLDEN = HERE / "golden.json"
 
 
 def load_digest():
-    spec = importlib.util.spec_from_file_location("news_digest_eval", HERE.parent / "news digest.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["news_digest_eval"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    """The parts of the newsdigest package the scorer calls, as one namespace."""
+    sys.path.insert(0, str(HERE.parent))
+    from newsdigest import filtering, grouping, models, settings, summarising
+    return types.SimpleNamespace(
+        Config=settings.Config, Article=models.Article, Company=models.Company,
+        filter_articles=filtering.filter_articles, is_low_quality=filtering.is_low_quality,
+        is_material=filtering.is_material, strongly_relevant=filtering.strongly_relevant,
+        is_excluded=filtering.is_excluded, _same_event=grouping._same_event,
+        unsupported_figures=summarising.unsupported_figures)
 
 
 def _company(nd, spec: dict):

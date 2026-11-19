@@ -1,4 +1,4 @@
-# Tier Company News Digest
+# Investor News Digest
 
 [![CI](https://github.com/rishanksingh-2005/investor-news-digest/actions/workflows/ci.yml/badge.svg)](https://github.com/rishanksingh-2005/investor-news-digest/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -14,9 +14,14 @@ Companies can be split into priority **tiers**; by default Tiers 1, 2 and 3 go
 into a single combined digest.
 
 ```bash
-python "news digest.py" --watchlist my_companies.xlsx --check   # see how your file is read
-python "news digest.py" --watchlist my_companies.xlsx           # build the digest
+pip install git+https://github.com/rishanksingh-2005/investor-news-digest
+newsdigest --init-config                                # config.yaml with every setting explained
+newsdigest --watchlist my_companies.xlsx --check        # see how your file is read
+newsdigest --watchlist my_companies.xlsx                # build the digest (and email it, if set up)
 ```
+
+From a source checkout, `python "news digest.py" …` and `python -m newsdigest …`
+do exactly the same.
 
 ---
 
@@ -180,6 +185,30 @@ ignores the cache and fetches everything fresh.
 
 ## Setup
 
+### Option A: install the `newsdigest` command (recommended for users)
+
+```bash
+python -m venv digest-env
+digest-env\Scripts\activate          # macOS / Linux: source digest-env/bin/activate
+pip install git+https://github.com/rishanksingh-2005/investor-news-digest
+```
+
+Then work in a folder of your choice (one per client works well). Everything
+the digest reads and writes lives in that folder: `config.yaml`, the watchlist,
+`.env`, the cache, the reports and the logs.
+
+```bash
+mkdir client-a && cd client-a
+newsdigest --init-config                  # config.yaml: every setting, explained
+newsdigest --init-watchlist watchlist.xlsx
+newsdigest --doctor                       # Chrome, LLM, watchlist, keys, email
+newsdigest                                # build the digest
+```
+
+Set `NEWS_DIGEST_HOME` to use a different folder than the current one.
+
+### Option B: run from a source checkout (for development)
+
 **Windows (PowerShell)**
 
 ```powershell
@@ -200,10 +229,13 @@ python3 -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
+Here the project folder is the home folder, and `python "news digest.py"` (or
+`pip install -e .` for the `newsdigest` command) runs it.
+
 Optional local BART summariser (~2 GB of extra packages):
 
 ```bash
-pip install -r requirements-bart.txt
+pip install -r requirements-bart.txt        # or: pip install "investor-news-digest[bart]"
 ```
 
 It uses the model in `NLP/` if that folder is present, and otherwise downloads
@@ -245,24 +277,25 @@ count as empty, and duplicate company names are dropped.
 If your headers are unusual, map them yourself:
 
 ```bash
-python "news digest.py" -w export.csv --map "name=Long Description,tier=Bucket" --check
+newsdigest -w export.csv --map "name=Long Description,tier=Bucket" --check
 ```
 
 **Getting started:**
 
 ```bash
-python "news digest.py" --init-watchlist watchlist.xlsx   # starter file (.xlsx, .csv or .json)
-python "news digest.py" -w watchlist.xlsx --check         # columns found, companies per tier, skipped rows
-python "news digest.py" -c "Rolls-Royce Holdings" -c "BAE Systems"   # no file at all
+newsdigest --init-watchlist watchlist.xlsx   # starter file (.xlsx, .csv or .json)
+newsdigest -w watchlist.xlsx --check         # columns found, companies per tier, skipped rows
+newsdigest -c "Rolls-Royce Holdings" -c "BAE Systems"   # no file at all
 ```
 
 Where the watchlist comes from, in order: `--watchlist FILE`; the `WATCHLIST`
 environment variable (handy in `.env`); `watchlist.xlsx`/`.csv`/`.json`/`.txt` or
-`Company List.xlsx` next to the script; and finally the bundled
-`examples/watchlist.example.csv`, so a fresh clone runs out of the box.
+`Company List.xlsx` in the home folder; and, in a source checkout, the bundled
+`examples/watchlist.example.csv`, so a fresh clone runs out of the box. The
+`watchlist` setting in `config.yaml` works too.
 
 Real watchlists are client data, so `.gitignore` keeps `watchlist.*`,
-`watchlists/` and `Company List.xlsx` out of the repository.
+`watchlists/`, `Company List.xlsx` and `config.yaml` out of the repository.
 
 ### Environment variables (`.env`)
 
@@ -276,6 +309,9 @@ what you need. `.env` is git-ignored, and keys are never printed or put in URLs.
 | `FINNHUB_API_KEY` | Finnhub news source (optional) | Free at [finnhub.io/register](https://finnhub.io/register); the key is on your dashboard. |
 | `SEC_USER_AGENT` | SEC EDGAR filings (US listings) | No sign-up. The SEC requires your name and email: `SEC_USER_AGENT=Jane Smith jane@example.com` |
 | `WATCHLIST` | Default watchlist file, if you don't pass `--watchlist` | |
+| `SMTP_PASSWORD` | Emailing the digest (see below) | Your mail provider. Gmail and Microsoft 365 need an *app password*. |
+| `NEWS_DIGEST_CONFIG` | A settings file other than `config.yaml` | |
+| `NEWS_DIGEST_HOME` | A home folder other than the current one | |
 
 None are needed for the default Ollama run: without a Finnhub key, Finnhub is
 skipped; without an SEC contact, EDGAR is still tried with a generic one, which
@@ -291,7 +327,7 @@ Notes on Finnhub:
 **Check everything in one go:**
 
 ```bash
-python "news digest.py" --doctor
+newsdigest --doctor
 ```
 
 ```
@@ -301,10 +337,11 @@ python "news digest.py" --doctor
   [OK  ] Ollama               running, llama3.2:3b available
   [OK  ] Finnhub              key valid
   [OK  ] SEC EDGAR            contact set, EDGAR reachable
+  [OK  ] Email                smtp.example.com:587 login OK; sends to 2 recipient(s)
 ```
 
 It makes one cheap test call per key that is set (Finnhub, OpenAI, Anthropic,
-SEC) and tells you exactly what to fix.
+SEC), logs in to the mail server without sending anything, and tells you exactly what to fix.
 
 ---
 
@@ -314,11 +351,11 @@ Make sure Ollama is running (`ollama list` should show `llama3.2:3b`), activate
 the venv, then:
 
 ```bash
-python "news digest.py"
+newsdigest                 # or, from a source checkout: python "news digest.py"
 ```
 
 A Chrome window opens so you can watch, or dismiss a consent popup once. When the
-run finishes, these files appear in the project folder:
+run finishes, these files appear in the home folder (or `output_dir`):
 
 ```
 news digest YYYY-MM-DD.pdf
@@ -339,6 +376,10 @@ A large watchlist (100+ companies) takes a while on the first run. Use
 | `--check` | Show how the watchlist is read (columns, tiers, skipped rows) and exit. |
 | `--init-watchlist FILE` | Write a starter watchlist and exit. |
 | `--doctor` | Check the setup and test your API keys, then exit. |
+| `--config FILE` | Use this settings file (default: `config.yaml` in the home folder). |
+| `--init-config [FILE]` | Write a starter `config.yaml` with every setting explained, then exit. |
+| `--email-to ADDRESS` | Email the digest to this address (repeatable; replaces `email_to`). |
+| `--no-email` | Don't email this run, even if `email_to` is set. |
 | `--tiers 1,2,3` | Comma-separated tiers to include (default: all three). |
 | `--tier 2` | A single tier only. |
 | `--days 14` | Discovery window in days (default 14). |
@@ -356,13 +397,41 @@ A large watchlist (100+ companies) takes a while on the first run. Use
 Examples:
 
 ```bash
-python "news digest.py" --tiers 1,2 --days 7 --headless
-python "news digest.py" --tier 1 --provider anthropic
+newsdigest --tiers 1,2 --days 7 --headless
+newsdigest --tier 1 --provider anthropic
+newsdigest --config client-b.yaml --email-to analyst@example.com
 ```
 
-### Configuration
+### Configuration (`config.yaml`)
 
-Everything else lives in the `Config` dataclass at the top of `news digest.py`:
+Every setting can live in a `config.yaml` in the home folder, so nobody has to
+touch Python. `newsdigest --init-config` writes one listing every setting with
+its default and an explanation; uncomment what you want to change:
+
+```yaml
+watchlist: watchlist.xlsx
+tiers: [1, 2]
+days_back: 7
+llm_provider: anthropic
+
+sources:                      # section names are optional, just for readability
+  use_gdelt: true
+  use_finnhub: false
+
+email_to: [team@example.com]
+smtp_host: smtp.gmail.com
+smtp_user: digest@example.com
+```
+
+The order of precedence is built-in defaults, then `config.yaml`, then
+command-line flags. Paths are relative to the config file. A mistyped setting
+name stops the run with a suggestion (`unknown setting 'day_back' (did you mean
+'days_back'?)`), so a typo never silently does nothing. API keys and passwords
+stay in `.env`, never in `config.yaml`. One config file per client
+(`--config client-a.yaml`) is an easy way to run several digests.
+`examples/config.example.yaml` shows the full file.
+
+The main settings:
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -389,9 +458,29 @@ Everything else lives in the `Config` dataclass at the top of `news digest.py`:
 | `feed_cache_minutes` / `article_cache_days` / `failed_article_retry_hours` | 60 / 30 / 24 | How long each kind of cached item is reused. |
 | `verify_figures` | on | Number check on AI bullets and summaries. |
 | `log_dir` | `<output_dir>/logs` | Where run logs go (`""` turns logging off). |
+| `email_to`, `email_from`, `email_subject` | none, `smtp_user`, `News digest {date}` | Who gets the digest, and the subject line (`{date}` `{tiers}` `{companies}` `{items}`). |
+| `smtp_host`, `smtp_port`, `smtp_security`, `smtp_user` | none, 587, `starttls`, none | Your mail server. |
+| `email_attach_docx`, `email_when_empty` | on, off | Attach the Word file too; email a short note when there was no news. |
 
-Source blocklist, relevance keywords and noise patterns are module-level lists
-just below `Config` (`SOURCE_BLOCKLIST`, `RELEVANCE_KEYWORDS`, …).
+Source blocklist, relevance keywords and noise patterns are lists in
+`newsdigest/patterns.py` (`SOURCE_BLOCKLIST`, `RELEVANCE_KEYWORDS`, …).
+
+### Emailing the digest
+
+Set `email_to`, `smtp_host` and `smtp_user` in `config.yaml`, and put the mail
+password in `.env` as `SMTP_PASSWORD`. After each run the PDF (and Word file) is
+sent with a short summary: points per company, plus any run warnings. Any SMTP
+server works:
+
+| Provider | `smtp_host` | `smtp_port` / `smtp_security` |
+|---|---|---|
+| Gmail / Google Workspace | `smtp.gmail.com` | 587 / `starttls` (needs an app password) |
+| Microsoft 365 / Outlook | `smtp.office365.com` | 587 / `starttls` |
+| SendGrid | `smtp.sendgrid.net` | 587 / `starttls` (user `apikey`) |
+| Your own server | yours | 465 / `ssl`, or 587 / `starttls` |
+
+`newsdigest --doctor` logs in without sending anything. A failed send never stops
+the run: the reports are still written, and the run is marked degraded (exit code 2).
 
 ---
 
@@ -401,14 +490,18 @@ just below `Config` (`SOURCE_BLOCKLIST`, `RELEVANCE_KEYWORDS`, …).
 to start at login:
 
 ```powershell
-schtasks /Create /SC DAILY /ST 07:00 /TN "News Digest" /TR "\"C:\path\to\project\.venv\Scripts\python.exe\" \"C:\path\to\project\news digest.py\" --headless"
+schtasks /Create /SC DAILY /ST 07:00 /TN "News Digest" /TR "cmd /c cd /d C:\digests\client-a && C:\digests\digest-env\Scripts\newsdigest.exe --headless"
 ```
 
 **macOS / Linux (cron)**, daily at 07:00:
 
 ```
-0 7 * * * cd "/path/to/project" && .venv/bin/python "news digest.py" --headless >> schedule.log 2>&1
+0 7 * * * cd "$HOME/digests/client-a" && "$HOME/digests/digest-env/bin/newsdigest" --headless
 ```
+
+Each run writes its own log to `logs/`, and the exit code (0 OK, 1 failed,
+2 degraded) is what Task Scheduler and cron record. Set `email_to` to have the
+digest arrive in your inbox.
 
 The machine must be awake at that time. A cloud scheduler can't reach a local
 Ollama, so there use `--provider openai` or `--provider anthropic`.
@@ -426,7 +519,9 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 | `[SEC EDGAR] failed: HTTP 403`, or the `SEC_USER_AGENT` warning | Set `SEC_USER_AGENT=Your Name you@domain.com` in `.env`. |
 | A key in `.env` seems ignored | A variable already set in your system environment takes priority over `.env`. Remove the old one, or open a new terminal. |
 | ChromeDriver errors | Update Chrome; Selenium 4 matches the driver automatically. |
-| `can't open file … news digest.py` | Wrong folder, or the name isn't quoted. It has a space: `"news digest.py"`. |
+| `can't open file … news digest.py` | Wrong folder, or the name isn't quoted. It has a space: `"news digest.py"`. Or install the package and use `newsdigest`. |
+| `Config problem: … unknown setting` | A typo in `config.yaml`; the message suggests the right name. |
+| `Email not sent: …` | Check `smtp_host` / `smtp_user` in `config.yaml` and `SMTP_PASSWORD` in `.env`, then run `--doctor`. Gmail and Microsoft 365 need an app password. |
 | A company you expected is missing | It was filtered (price chatter / promo / admin filler), or nothing readable passed in the window. Try `--days 21`. If it's usually called by a short name ("WOSG", "Rolls-Royce"), add that to its Aliases column. |
 | Stories about a different company with a similar name | Add the other company's name to the Exclude column. |
 | `[GDELT] rate-limited twice` | GDELT allows one request every 5 seconds per client, and sometimes blocks a busy connection for longer. The run carries on without it. |
@@ -446,7 +541,7 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # ~275 tests, a few seconds
+python -m pytest          # ~305 tests, about 15 seconds
 python eval/evaluate.py   # accuracy scores on the labelled cases, with every miss
 ruff check .              # lint
 ```
@@ -461,19 +556,37 @@ filter, dedupe and topic merging, the LLM fallbacks, the cache (expiry, reuse,
 `--new-only`), the cache → HTTP → Chrome routing, the page budget, the PDF and DOCX
 writers, the CLI, and a complete offline `run()` end to end.
 
-**CI.** GitHub Actions (`.github/workflows/ci.yml`) runs `ruff` and the tests on
-every push and pull request: Ubuntu on Python 3.10, 3.13 and 3.14, plus Windows.
+**CI.** GitHub Actions (`.github/workflows/ci.yml`) runs `ruff`, the tests and the
+accuracy scores on every push and pull request (Ubuntu on Python 3.10, 3.13 and
+3.14, plus Windows), then installs the package and runs the `newsdigest` command
+in an empty folder, the way a customer would.
 
 ## Project layout
 
 ```
-news digest.py          the whole pipeline (single script)
-examples/               sample watchlist (watchlist.example.csv)
+newsdigest/             the package, one module per stage:
+  watchlists.py           load the company list (any format)
+  sources.py              1. discover (Google News, regulated feeds, SEC, Finnhub, GDELT)
+  extraction.py           2. read articles (cache -> HTTP -> Chrome), page dates
+  filtering.py            3. relevance, recency, noise, importance
+  grouping.py             4. dedupe and topic grouping
+  summarising.py          5. LLM / BART bullets, number check, LLM resilience
+  publishing.py           6. PDF + DOCX
+  delivery.py             email the digest
+  pipeline.py             run(): the phases end to end
+  cli.py                  command line and --doctor
+  settings.py             the Config dataclass (every setting)
+  configfile.py           config.yaml loading and the starter file
+  patterns.py             source lists, keywords, text patterns
+  storage.py, health.py   SQLite cache; run report and helpers
+news digest.py          source-checkout launcher (same as `newsdigest`)
+examples/               sample watchlist and config.example.yaml
 watchlist.xlsx / .csv   your own watchlist (not in git)
+config.yaml             your own settings (not in git)
 requirements.txt        core dependencies
 requirements-bart.txt   optional local BART summariser
 requirements-dev.txt    test + lint tools
-pyproject.toml          pytest and ruff settings
+pyproject.toml          package metadata, the newsdigest command, pytest and ruff
 tests/                  offline test suite (+ fixtures/)
 eval/                   labelled accuracy cases (golden.json) and the scorer
 .github/workflows/      CI

@@ -1,5 +1,49 @@
-# Tool configuration only (the project is a single script, not an installable
-# package yet). Dependencies live in requirements*.txt.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "investor-news-digest"
+version = "1.0.0"
+description = "Investor news digest for your own company watchlist: Google News, SEC EDGAR and Finnhub, summarised by an LLM with a number check, published as PDF and Word."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Rishank Singh" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+# Keep in step with requirements.txt (which pins the same minimums for a
+# plain `pip install -r requirements.txt` checkout).
+dependencies = [
+    "selenium>=4.20",
+    "openpyxl>=3.1",
+    "beautifulsoup4>=4.12",
+    "trafilatura>=1.8",
+    "reportlab>=4.0",
+    "python-docx>=1.1",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "openai>=1.40",
+    "anthropic>=0.40",
+]
+
+[project.optional-dependencies]
+bart = ["transformers>=4.40", "torch>=2.2"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+newsdigest = "newsdigest.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rishanksingh-2005/investor-news-digest"
+
+[tool.setuptools]
+packages = ["newsdigest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -11,7 +55,7 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["NLP", ".venv"]
+extend-exclude = ["NLP", ".venv", "build"]
 
 [tool.ruff.lint]
 # pycodestyle errors (E4/E7/E9) + pyflakes (F): real bugs and syntax problems,
