@@ -1,8 +1,7 @@
 # Tier Company News Digest
 
-<!-- After pushing to GitHub, add the CI badge (replace OWNER/REPO):
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
--->
+[![CI](https://github.com/rishanksingh-2005/investor-news-digest/actions/workflows/ci.yml/badge.svg)](https://github.com/rishanksingh-2005/investor-news-digest/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 An investor-focused news digest for **your own watchlist** of listed companies.
 Point it at your company list (Excel, CSV, JSON or a plain text file, with
