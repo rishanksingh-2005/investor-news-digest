@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import io
+import subprocess
 import json
 import sys
 import urllib.error
@@ -104,6 +105,9 @@ def nd(monkeypatch):
     monkeypatch.setattr(_ND, "_BART_PIPE", None)
     monkeypatch.setattr(_ND, "_CACHE", _ND.Cache(None))       # caching off unless a test opts in
     monkeypatch.setattr(_ND.time, "sleep", lambda s: None)    # retries / polite delays: no waiting
+    # Never touch the real Task Scheduler / launchd / crontab: "nothing scheduled".
+    monkeypatch.setattr(newsdigest.scheduling, "_run",
+                        lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "not found"))
     # Never let a test pick up real keys from a developer's .env.
     for var in ("FINNHUB_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "SEC_USER_AGENT"):
         monkeypatch.delenv(var, raising=False)

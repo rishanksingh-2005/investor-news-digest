@@ -54,3 +54,7 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# --- Launcher written by newsdigest --schedule (machine-specific paths) -----
+/run-digest.cmd
+/run-digest.sh

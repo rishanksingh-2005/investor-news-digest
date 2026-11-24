@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "investor-news-digest"
-version = "1.0.0"
+version = "1.1.0"
 description = "Investor news digest for your own company watchlist: Google News, SEC EDGAR and Finnhub, summarised by an LLM with a number check, published as PDF and Word."
 readme = "README.md"
 license = "MIT"

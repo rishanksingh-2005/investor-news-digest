@@ -23,7 +23,8 @@ import yaml
 from . import settings, watchlists
 
 # Settings that are command-line actions, not configuration.
-RUNTIME_ONLY = {"companies", "check_only", "init_watchlist", "doctor", "config_path", "init_config"}
+RUNTIME_ONLY = {"companies", "check_only", "init_watchlist", "doctor", "config_path", "init_config",
+                "schedule", "unschedule"}
 PATH_FIELDS = {"watchlist", "output_dir", "cache_path", "log_dir", "bart_model_dir"}
 _TRUE = {"true", "yes", "on", "1", "y"}
 _FALSE = {"false", "no", "off", "0", "n"}

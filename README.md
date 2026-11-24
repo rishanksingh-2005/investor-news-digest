@@ -393,6 +393,7 @@ A large watchlist (100+ companies) takes a while on the first run. Use
 | `--check` | Show how the watchlist is read (columns, tiers, skipped rows) and exit. |
 | `--init-watchlist FILE` | Write a starter watchlist and exit. |
 | `--doctor` | Check the setup and test your API keys, then exit. |
+| `--schedule WHEN`, `--unschedule` | Run automatically (`07:00`, `"weekdays 07:00"`, `"mon,thu 18:30"`), or stop. See [Scheduling](#scheduling-optional). |
 | `--config FILE` | Use this settings file (default: `config.yaml` in the home folder). |
 | `--init-config [FILE]` | Write a starter `config.yaml` with every setting explained, then exit. |
 | `--email-to ADDRESS` | Email the digest to this address (repeatable; replaces `email_to`). |
@@ -506,25 +507,35 @@ the run: the reports are still written, and the run is marked degraded (exit cod
 
 ## Scheduling (optional)
 
-**Windows (Task Scheduler)**, daily at 07:00. Use full paths, and keep Ollama set
-to start at login:
+One command sets up an automatic run, using your computer's own scheduler. Run
+it in the folder you'd normally run the digest from:
 
-```powershell
-schtasks /Create /SC DAILY /ST 07:00 /TN "News Digest" /TR "cmd /c cd /d C:\digests\client-a && C:\digests\digest-env\Scripts\newsdigest.exe --headless"
+```bash
+newsdigest --schedule 07:00                 # every day at 07:00
+newsdigest --schedule "weekdays 07:00"      # Monday to Friday
+newsdigest --schedule "mon,thu 18:30"       # chosen days
+newsdigest --unschedule                     # remove it
 ```
 
-**macOS / Linux (cron)**, daily at 07:00:
+- **Settings and flags:** the scheduled run uses the folder's `config.yaml`, `.env` and
+  watchlist. Any other flags you add are kept, for example
+  `newsdigest --schedule 07:00 --tier 1`.
+- **One schedule per folder:** each client folder can have its own. Running
+  `--schedule` again in the same folder replaces that folder's schedule.
+- **Checked first:** if the time or the watchlist is wrong, nothing is scheduled and you're told why.
+- **Under the hood:** Task Scheduler on Windows, launchd on macOS, cron on Linux. It
+  starts a small launcher script in the folder (`run-digest.cmd` or `run-digest.sh`).
+  Each run's output goes to `logs/last-scheduled-run.txt`, with the full run log
+  in `logs/` as usual.
+- **Status:** `newsdigest --doctor` shows the next run time.
 
-```
-0 7 * * * cd "$HOME/digests/client-a" && "$HOME/digests/digest-env/bin/newsdigest" --headless
-```
+The computer has to be on at that time. On Windows a run missed while it was
+asleep starts as soon as it wakes. Keep Ollama set to start at login. Set
+`email_to` to have the digest arrive in your inbox. The exit code (0 OK,
+1 failed, 2 degraded) is what the scheduler records.
 
-Each run writes its own log to `logs/`, and the exit code (0 OK, 1 failed,
-2 degraded) is what Task Scheduler and cron record. Set `email_to` to have the
-digest arrive in your inbox.
-
-The machine must be awake at that time. A cloud scheduler can't reach a local
-Ollama, so there use `--provider openai` or `--provider anthropic`.
+A cloud scheduler can't reach a local Ollama, so there use `--provider openai`
+or `--provider anthropic`.
 
 ---
 
@@ -561,7 +572,7 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # ~325 tests, about 20 seconds
+python -m pytest          # ~355 tests, about 20 seconds
 python eval/evaluate.py   # accuracy scores on the labelled cases, with every miss
 ruff check .              # lint
 ```
@@ -593,6 +604,7 @@ newsdigest/             the package, one module per stage:
   summarising.py          5. LLM / BART bullets, number check, LLM resilience
   publishing.py           6. PDF + DOCX
   delivery.py             email the digest
+  scheduling.py           --schedule: Task Scheduler / launchd / cron
   pipeline.py             run(): the phases end to end
   cli.py                  command line and --doctor
   settings.py             the Config dataclass (every setting)

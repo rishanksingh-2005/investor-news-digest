@@ -11,7 +11,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from . import configfile, delivery, health, pipeline, settings, sources, state, watchlists
+import sys
+from . import configfile, delivery, health, pipeline, scheduling, settings, sources, state, watchlists
 
 
 def parse_args(argv: list[str] | None = None) -> settings.Config:
@@ -48,6 +49,11 @@ def parse_args(argv: list[str] | None = None) -> settings.Config:
                    help="write a starter watchlist (.xlsx, .csv or .json) and exit")
     p.add_argument("--doctor", action="store_true",
                    help="check the setup (Chrome, LLM, watchlist) and test your API keys, then exit")
+    s = p.add_argument_group("automatic runs")
+    s.add_argument("--schedule", default=None, metavar="WHEN",
+                   help="run automatically, e.g. 07:00 (daily), \"weekdays 07:00\", \"mon,thu 18:30\"; "
+                        "other flags given with it are used for the scheduled runs")
+    s.add_argument("--unschedule", action="store_true", help="remove this folder's automatic run")
     p.add_argument("--tier", type=int, default=None, help="run a single tier only")
     p.add_argument("--tiers", default=None, help="comma-separated tiers, e.g. 1,2 (default)")
     p.add_argument("--days", type=int, default=cfg.days_back, dest="days_back")
@@ -93,6 +99,8 @@ def parse_args(argv: list[str] | None = None) -> settings.Config:
     cfg.init_watchlist = a.init_watchlist
     cfg.init_config = a.init_config
     cfg.doctor = a.doctor
+    cfg.schedule = a.schedule
+    cfg.unschedule = a.unschedule
     if a.email_to:
         cfg.email_to = [x.strip() for x in a.email_to if x.strip()]
     if a.no_email:
@@ -164,6 +172,8 @@ def doctor(cfg: settings.Config) -> int:
                   os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
                   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"] if os.path.exists(p)), None))
     say("OK" if chrome else "FAIL", "Chrome", "found" if chrome else "not found: install Google Chrome")
+    say("OK" if cfg.config_path else "--", "Settings file",
+        cfg.config_path or f"none, using defaults (create one: {settings.command()} --init-config)")
 
     try:
         companies, _ = watchlists.read_watchlist(cfg) if not cfg.companies else (watchlists.load_companies(cfg), None)
@@ -239,6 +249,8 @@ def doctor(cfg: settings.Config) -> int:
     # Email delivery (optional): connects and logs in, sends nothing
     status, detail = delivery.check(cfg)
     say(status, "Email", detail)
+    status, detail = scheduling.status()
+    say(status, "Schedule", detail)
 
     # SEC EDGAR (US listings)
     ua = os.environ.get("SEC_USER_AGENT", "").strip().strip("\"'").strip()
@@ -260,6 +272,22 @@ def doctor(cfg: settings.Config) -> int:
     return 1 if fails else 0
 
 
+def _schedule(cfg: settings.Config, argv: list[str]) -> int:
+    """--schedule: refuse to set up a run that would fail at 7am for an obvious
+    reason (bad time, watchlist that doesn't load), then hand over to the OS scheduler."""
+    try:
+        scheduling.parse_when(cfg.schedule)
+        if not cfg.companies:
+            companies, _ = watchlists.read_watchlist(cfg)
+            if not companies:
+                raise watchlists.WatchlistError(f"no companies found in {cfg.watchlist}")
+        print(scheduling.install(cfg.schedule, argv))
+    except (scheduling.ScheduleError, watchlists.WatchlistError, OSError) as e:
+        print(f"Not scheduled: {e}")
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     cfg = parse_args(argv)
     if cfg.init_config:
@@ -270,12 +298,19 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Wrote {cfg.init_config}: every setting with its default and an explanation.\n"
               f"Uncomment the lines you want to change. It's used automatically when it's called\n"
-              f"config.yaml in the project folder; otherwise pass --config {cfg.init_config}.")
+              f"config.yaml in the project folder; otherwise pass --config {cfg.init_config}.\n"
+              f"To email the digest: set email_to, smtp_host and smtp_user in it, put the mail\n"
+              f"password in .env as SMTP_PASSWORD, then check with: {settings.command()} --doctor")
         return 0
     if cfg.config_path:
         print(f"Settings: {cfg.config_path}")
     if cfg.doctor:
         return doctor(cfg)
+    if cfg.unschedule:
+        print(scheduling.remove())
+        return 0
+    if cfg.schedule:
+        return _schedule(cfg, sys.argv[1:] if argv is None else argv)
     if cfg.init_watchlist:
         try:
             watchlists.write_watchlist_template(cfg.init_watchlist)

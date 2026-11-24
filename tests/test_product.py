@@ -327,3 +327,11 @@ def test_home_folder_rules(nd, monkeypatch, tmp_path):
     assert settings._home() == str(tmp_path)
     monkeypatch.delenv("NEWS_DIGEST_HOME")
     assert settings._home() == str(ROOT)                  # source checkout: the repo folder
+
+
+def test_doctor_and_init_config_point_new_users_to_the_settings_file(nd, smtp, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert "--init-config creates one" in nd.check(nd.Config())[1]
+    assert nd.main(["--init-config", str(tmp_path / "config.yaml")]) == 0
+    out = capsys.readouterr().out
+    assert "SMTP_PASSWORD" in out and "--doctor" in out

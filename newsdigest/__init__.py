@@ -15,13 +15,13 @@ The pipeline, one module per stage:
     pipeline     run() ties the phases together; cli is the command line
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Load every module once, in dependency order, so `newsdigest.<module>` works.
 from . import state  # noqa: F401  (must be first: holds the run-wide state)
 from . import (  # noqa: F401,E402
     patterns, models, settings, watchlists, configfile, browser, storage, health, sources, extraction,
-    filtering, grouping, summarising, publishing, delivery, pipeline, cli,
+    filtering, grouping, summarising, publishing, delivery, scheduling, pipeline, cli,
 )
 from .settings import Config  # noqa: E402
 from .pipeline import run  # noqa: E402

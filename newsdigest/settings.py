@@ -93,6 +93,8 @@ class Config:
     doctor: bool = False                 # --doctor: check setup and test API keys, then exit
     config_path: str | None = None       # the config.yaml that was applied, if any
     init_config: str | None = None       # --init-config FILE: write a starter config, then exit
+    schedule: str | None = None          # --schedule "weekdays 07:00": run automatically, then exit
+    unschedule: bool = False             # --unschedule: remove this folder's schedule, then exit
 
     # Email delivery (optional): send the PDF + DOCX after each run. The mail
     # password goes in .env as SMTP_PASSWORD, never in this file.

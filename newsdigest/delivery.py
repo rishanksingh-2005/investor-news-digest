@@ -249,7 +249,8 @@ def subject_for(cfg: settings.Config, date: str, tiers: str, n_companies: int, n
 def check(cfg: settings.Config) -> tuple[str, str]:
     """For --doctor: connect and log in without sending anything."""
     if not cfg.email_to:
-        return "--", "off (set email_to in config.yaml to email the digest)"
+        return "--", (f"off (to email the digest, set email_to in config.yaml; "
+                      f"{settings.command()} --init-config creates one)")
     try:
         server = _connect(cfg)
         server.quit()
