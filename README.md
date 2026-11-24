@@ -23,6 +23,20 @@ newsdigest --watchlist my_companies.xlsx                # build the digest (and 
 From a source checkout, `python "news digest.py" …` and `python -m newsdigest …`
 do exactly the same.
 
+## What you get
+
+A real, unedited run on 24 Nov 2026 over [ten well-known listed companies](docs/sample/watchlist.csv),
+as it arrives by email. The same digest is attached as a [PDF](docs/sample/digest.pdf)
+and a Word file. Companies with no material news that fortnight (Shopify, ASML and BP
+here) are left out, and every point links to its source.
+
+<p align="center">
+  <img src="docs/sample/sample-email.png" alt="Sample digest email: points for Apple, Microsoft, NVIDIA, Unilever, AstraZeneca, Rolls-Royce and Tesla, each with its source and date" width="640">
+</p>
+
+On a phone it reflows to one column: [phone screenshot](docs/sample/sample-email-phone.png).
+To reproduce it from a source checkout: `newsdigest --watchlist docs/sample/watchlist.csv`.
+
 ---
 
 ## How it works
@@ -59,9 +73,12 @@ Only step 5 uses AI. Everything else is plain code and public feeds.
 **Quality gates.** A story only reaches the report if it comes from a
 non-blocklisted source, names the company in its headline or lead, carries a
 material signal (earnings, M&A, guidance, contracts, leadership, regulatory…), is
-not share-price/valuation chatter, consumer promo or routine RNS admin, and has a
-real readable article body (not a paywall or consent stub). Companies with nothing
-material are left out of the report.
+not share-price/valuation chatter, consumer promo or routine RNS admin, is not
+about an investor's stake in the stock ("fund keeps adding ASML"), is not another
+company's newswire release that merely mentions it, and has a real readable article
+body (not a paywall, consent stub or "are you a robot?" check). SEC filings are
+described in plain words ("8-K: Results of operations", "144: Insider's notice of a
+planned share sale"). Companies with nothing material are left out of the report.
 
 **Page budget.** At most `max_articles_per_company` points per company and
 `max_total_items` across the whole digest (about 8 pages), ranked by importance.
@@ -461,6 +478,7 @@ The main settings:
 | `email_to`, `email_from`, `email_subject` | none, `smtp_user`, `News digest {date}` | Who gets the digest, and the subject line (`{date}` `{tiers}` `{companies}` `{items}`). |
 | `smtp_host`, `smtp_port`, `smtp_security`, `smtp_user` | none, 587, `starttls`, none | Your mail server. |
 | `email_attach_docx`, `email_when_empty` | on, off | Attach the Word file too; email a short note when there was no news. |
+| `email_show_warnings` | on | List run warnings at the foot of the email. Turn off when the email goes to clients. |
 
 Source blocklist, relevance keywords and noise patterns are lists in
 `newsdigest/patterns.py` (`SOURCE_BLOCKLIST`, `RELEVANCE_KEYWORDS`, …).
@@ -468,9 +486,11 @@ Source blocklist, relevance keywords and noise patterns are lists in
 ### Emailing the digest
 
 Set `email_to`, `smtp_host` and `smtp_user` in `config.yaml`, and put the mail
-password in `.env` as `SMTP_PASSWORD`. After each run the PDF (and Word file) is
-sent with a short summary: points per company, plus any run warnings. Any SMTP
-server works:
+password in `.env` as `SMTP_PASSWORD`. After each run the whole digest goes out
+in the body of the email, laid out like the PDF and readable on a phone, with the
+PDF (and Word file) attached. Mail apps that don't show HTML get the same digest
+as plain text. Run warnings are listed at the foot unless `email_show_warnings`
+is off. Any SMTP server works:
 
 | Provider | `smtp_host` | `smtp_port` / `smtp_security` |
 |---|---|---|
@@ -541,7 +561,7 @@ Ollama, so there use `--provider openai` or `--provider anthropic`.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # ~305 tests, about 15 seconds
+python -m pytest          # ~325 tests, about 20 seconds
 python eval/evaluate.py   # accuracy scores on the labelled cases, with every miss
 ruff check .              # lint
 ```
@@ -581,6 +601,7 @@ newsdigest/             the package, one module per stage:
   storage.py, health.py   SQLite cache; run report and helpers
 news digest.py          source-checkout launcher (same as `newsdigest`)
 examples/               sample watchlist and config.example.yaml
+docs/sample/            a real sample digest (PDF, email screenshots) and its watchlist
 watchlist.xlsx / .csv   your own watchlist (not in git)
 config.yaml             your own settings (not in git)
 requirements.txt        core dependencies

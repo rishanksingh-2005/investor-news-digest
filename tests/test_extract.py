@@ -151,3 +151,12 @@ def test_browser_pool_uses_parallel_drivers_and_quits_them(nd, cfg, make_article
     nd._extract_with_browsers(arts, cfg)
     assert all(a.authentic for a in arts)
     assert 1 <= len(built) <= 3 and sorted(map(id, quit_)) == sorted(map(id, built))
+
+
+def test_cached_robot_check_page_is_rechecked(nd, cfg, cache, make_article, http_pages, browser):
+    """Pages cached as readable before the robot-check rule existed are not trusted blindly."""
+    from test_text import ROBOT_CHECK
+    a = make_article(url="https://www.bloomberg.com/news/x")
+    cache.put_article(nd._orig_key(a), "https://www.bloomberg.com/news/x", ROBOT_CHECK, True)
+    stats = nd.extract_all([a], cfg)
+    assert stats["cached"] == 1 and a.authentic is False

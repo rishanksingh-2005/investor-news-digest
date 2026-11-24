@@ -31,7 +31,9 @@ def _fallback_bullet(a: models.Article) -> str:
         form = re.sub(r"^SEC\s+|\s+filing\b.*$", "", a.headline).strip() or "Regulatory"
         desc = (a.snippet or "").strip()
         if desc and desc.upper() != form.upper():
-            return patterns._tidy_bullet(f"{form} filed with the SEC: {desc.capitalize()}")
+            # EDGAR descriptions are often SHOUTED ("QUARTERLY REPORT"); item names aren't
+            desc = desc.capitalize() if desc.isupper() else desc[0].upper() + desc[1:]
+            return patterns._tidy_bullet(f"{form} filed with the SEC: {desc}")
         return f"{form} filing published on SEC EDGAR."
     content = (content or "").strip()
     if len(content) < 40:

@@ -10,7 +10,9 @@
     "xpel":   {"name": "Xpel, Inc.", "ticker": "XPEL", "exchange": "XNAS"},
     "plow":   {"name": "Douglas Dynamics, Inc.", "ticker": "PLOW", "exchange": "XNYS"},
     "wosg":   {"name": "Watches Of Switzerland Group Plc", "aliases": ["WOSG"], "exchange": "XLON"},
-    "north":  {"name": "North West Electricity Plc", "exchange": "XLON"}
+    "north":  {"name": "North West Electricity Plc", "exchange": "XLON"},
+    "shop":   {"name": "Shopify Inc.", "ticker": "SHOP", "exchange": "XTSE"},
+    "asml":   {"name": "ASML Holding N.V.", "aliases": ["ASML"], "exchange": "XAMS"}
   },
 
   "relevance": [
@@ -69,7 +71,20 @@
     {"company": "north", "keep": true,  "headline": "North West Electricity agrees £300m takeover",
      "snippet": "The board of North West Electricity recommended the offer to shareholders."},
     {"company": "north", "keep": false, "headline": "Storms bring power cuts across the north west",
-     "snippet": "Electricity was restored to most homes after storms; one supplier faces a fine."}
+     "snippet": "Electricity was restored to most homes after storms; one supplier faces a fine."},
+
+    {"company": "shop", "keep": false, "headline": "SalesCloser Launches Live AI Video Sales Agent for Shopify Stores",
+     "snippet": "The app is on the Shopify App Store. About Shopify: merchant sales grew 29% in 2025.",
+     "source": "GlobeNewswire", "url": "https://www.globenewswire.com/news-release/salescloser",
+     "note": "Another company's press release on a newswire that only mentions Shopify."},
+    {"company": "shop", "keep": true,  "headline": "Shopify to Announce Fourth-Quarter 2026 Financial Results",
+     "snippet": "Shopify will report quarterly results and hold an earnings call on 11 February.",
+     "source": "GlobeNewswire", "url": "https://www.globenewswire.com/news-release/shopify"},
+    {"company": "asml", "keep": false, "headline": "Why Ken Fisher Keeps Adding ASML After Record Orders",
+     "snippet": "The fund now holds 4.84 million shares, 2.52% of its portfolio.",
+     "note": "An investor's position in the stock, not news about the company."},
+    {"company": "asml", "keep": true,  "headline": "ASML raises 2026 sales guidance as EUV orders stretch into 2030",
+     "snippet": "ASML now expects full-year sales of €44bn to €45bn."}
   ],
 
   "figures": [

@@ -1,0 +1,11 @@
+Company,Ticker,Exchange,Country,Currency,Tier,Aliases,Exclude
+Apple Inc.,AAPL,NASDAQ,US,USD,1,Apple,Apple Records; Big Apple
+Microsoft Corporation,MSFT,NASDAQ,US,USD,1,Microsoft,
+NVIDIA Corporation,NVDA,NASDAQ,US,USD,1,Nvidia,
+Unilever PLC,ULVR,LSE,UK,GBp,1,,
+AstraZeneca PLC,AZN,LSE,UK,GBp,1,AstraZeneca,
+Rolls-Royce Holdings plc,RR.,LSE,UK,GBp,2,Rolls-Royce,Rolls-Royce Motor Cars; Rolls-Royce Phantom; Rolls-Royce Cullinan
+ASML Holding N.V.,ASML,Euronext Amsterdam,NL,EUR,2,ASML,
+Shopify Inc.,SHOP,TSX,CA,CAD,2,,
+Tesla Inc.,TSLA,NASDAQ,US,USD,2,Tesla,Nikola Tesla
+BP p.l.c.,BP.,LSE,UK,GBp,2,BP,

@@ -234,9 +234,11 @@ def _run_pipeline(cfg: settings.Config) -> list[str]:
                 state._CACHE.mark_published(_published_keys(a), c.name, stamp)
         if cfg.email_to:
             n_items = sum(len(c.articles) for c in companies)
+            warnings = state._REPORT.all_warnings()
             delivery.send(cfg, [pdf] + ([docx_path] if cfg.email_attach_docx else []),
                           delivery.subject_for(cfg, stamp, publishing._tiers_label(cfg), len(companies), n_items),
-                          delivery.digest_body(companies, publishing._window_label(cfg), state._REPORT.all_warnings()))
+                          delivery.digest_text(companies, cfg, warnings),
+                          delivery.digest_html(companies, cfg, warnings))
         lap("publish", t)
         print(f"Done in {time.time() - t_start:.0f}s  ("
               + ", ".join(f"{k} {v:.0f}s" for k, v in timings.items()) + ")")

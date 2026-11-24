@@ -100,3 +100,11 @@ def test_load_bart_prefers_local_folder(nd, cfg, monkeypatch, tmp_path):
     cfg.bart_model_dir = str(tmp_path)
     nd._load_bart(cfg)
     assert loaded == [str(tmp_path), str(tmp_path)]
+
+
+def test_8k_bullet_names_the_reported_items(nd, make_article):
+    a = make_article(headline="SEC 8-K filing — Apple Inc.", kind="filing",
+                     snippet="Other events (Item 8.01)")
+    assert nd._fallback_bullet(a) == "8-K filed with the SEC: Other events (Item 8.01)."
+    a.snippet = "QUARTERLY REPORT"
+    assert nd._fallback_bullet(a) == "8-K filed with the SEC: Quarterly report."

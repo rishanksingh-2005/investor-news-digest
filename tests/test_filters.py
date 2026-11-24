@@ -124,3 +124,53 @@ def test_filter_articles_end_to_end(nd, cfg, make_article):
     filing = make_article(headline="SEC 8-K filing — Acme", kind="filing")
     kept = nd.filter_articles([good, blocked, stale, promo, offtopic, filing], co, cfg)
     assert kept == [good, filing]
+
+
+def _co(nd, name, **kw):
+    return nd.Company(name=name, **kw)
+
+
+@pytest.mark.parametrize("headline,source,url,dropped", [
+    ("SalesCloser Launches Live AI Video Sales Agent for Shopify Stores", "GlobeNewswire",
+     "https://www.globenewswire.com/news-release/x", True),
+    ("Shopify to Announce Fourth-Quarter 2026 Financial Results", "GlobeNewswire",
+     "https://www.globenewswire.com/news-release/y", False),
+    ("Acme Corp and Shopify partner on checkout", "PR Newswire", "https://www.prnewswire.com/z", False),
+    ("SalesCloser Launches Live AI Video Sales Agent for Shopify Stores", "Reuters",
+     "https://www.reuters.com/x", False),                       # only newswires are judged this way
+])
+def test_another_companys_press_release_is_dropped(nd, make_article, headline, source, url, dropped):
+    a = make_article(headline=headline, source=source, url=url)
+    assert nd.is_third_party_release(a, _co(nd, "Shopify Inc.", ticker="SHOP")) is dropped
+
+
+def test_press_release_found_by_ticker_or_alias(nd, make_article):
+    a = make_article(headline="NVDA sets date for results call", source="Business Wire",
+                     url="https://www.businesswire.com/a")
+    assert not nd.is_third_party_release(a, _co(nd, "NVIDIA Corporation", ticker="NVDA"))
+    a.headline = "Rolls-Royce confirms engine order"
+    assert not nd.is_third_party_release(a, _co(nd, "Rolls-Royce Holdings plc", aliases=["Rolls-Royce"]))
+
+
+@pytest.mark.parametrize("text,holding", [
+    ("Why Ken Fisher Keeps Adding ASML to His Portfolio", True),
+    ("Why Ken Fisher Keeps Adding to ASML Holding (ASML) While Its Order Book Is Sold Out", True),
+    ("Vanguard boosts its position in ASML Holding", True),
+    ("Hedge fund builds a 3% stake in ASML, 13F shows", True),
+    ("ASML increases its share buyback programme", False),
+    ("Shares in ASML jumped after record orders", False),
+    ("Chipmaker takes strategic stake in ASML supplier", False),
+])
+def test_investor_holding_stories_are_not_company_news(nd, text, holding):
+    assert nd.is_investor_holding(text, _co(nd, "ASML Holding N.V.", aliases=["ASML"])) is holding
+
+
+def test_filter_articles_drops_and_counts_them(nd, cfg, make_article):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    c = _co(nd, "ASML Holding N.V.", aliases=["ASML"])
+    arts = [make_article(headline="Why Ken Fisher keeps adding ASML after its record orders", published=now, source="Yahoo Finance"),
+            make_article(headline="ASML wins record EUV order from TSMC", published=now, source="Reuters")]
+    kept = nd.filter_articles(arts, c, cfg)
+    assert [a.headline for a in kept] == ["ASML wins record EUV order from TSMC"]
+    assert nd._REPORT.counts["dropped: an investor's stake, not company news"] == 1

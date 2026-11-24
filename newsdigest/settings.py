@@ -101,6 +101,7 @@ class Config:
     email_subject: str = "News digest {date}"      # placeholders: {date} {tiers} {companies} {items}
     email_attach_docx: bool = True       # attach the Word file as well as the PDF
     email_when_empty: bool = False       # also email a short note when nothing was published
+    email_show_warnings: bool = True     # list run warnings at the foot of the email (turn off for client mail)
     smtp_host: str = ""                  # e.g. smtp.gmail.com, smtp.office365.com
     smtp_port: int = 587                 # 587 with starttls, 465 with ssl
     smtp_security: str = "starttls"      # "starttls" | "ssl" | "none"

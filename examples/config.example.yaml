@@ -59,6 +59,7 @@ days_back: 14    # discovery window (quality-first, not a hard 7-day cut)
 # email_subject: News digest {date}    # placeholders: {date} {tiers} {companies} {items}
 # email_attach_docx: true    # attach the Word file as well as the PDF
 # email_when_empty: false    # also email a short note when nothing was published
+# email_show_warnings: true    # list run warnings at the foot of the email (turn off for client mail)
 # smtp_host: ''    # e.g. smtp.gmail.com, smtp.office365.com
 # smtp_port: 587    # 587 with starttls, 465 with ssl
 # smtp_security: starttls    # "starttls" | "ssl" | "none"

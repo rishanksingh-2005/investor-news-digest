@@ -44,7 +44,8 @@ def _company(nd, spec: dict):
 def would_keep(nd, cfg, case: dict, company) -> bool:
     """The same gates a story passes in a real run, with headline + snippet
     standing in for the AI bullet (so this measures the rules, not the model)."""
-    a = nd.Article(headline=case["headline"], url="https://example.com/x", snippet=case.get("snippet", ""))
+    a = nd.Article(headline=case["headline"], url=case.get("url", "https://example.com/x"),
+                   source=case.get("source", ""), snippet=case.get("snippet", ""))
     if not nd.filter_articles([a], company, cfg):
         return False
     a.bullet = f"{a.headline}. {a.snippet}".strip(". ")

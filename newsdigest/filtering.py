@@ -296,10 +296,47 @@ def is_low_quality(text: str) -> bool:
             or is_admin_filler(text))
 
 
+def _id_words(company: models.Company) -> set[str]:
+    """Words that name the company: the distinctive words of its name and aliases."""
+    out = set()
+    for n in _names(company):
+        toks = [t for t in _company_tokens(n) if len(t) >= 2]
+        out.update([t for t in toks if len(t) >= 4] or toks)
+    return out
+
+
+def is_third_party_release(a: models.Article, company: models.Company) -> bool:
+    """A newswire release from another company that only mentions this one."""
+    if a.kind == "filing":
+        return False
+    hay = re.sub(r"\s+", "", f"{a.source} {a.final_url or a.url}".lower())
+    if not any(k in hay for k in patterns.NEWSWIRE_KEYS):
+        return False
+    lead_words = (a.headline or "").split()[: patterns.NEWSWIRE_LEAD_WORDS]
+    lead = _norm(" ".join(lead_words)).split()
+    return not (_id_words(company) & set(lead)) and not ticker_mentioned(" ".join(lead_words), company)
+
+
+def is_investor_holding(text: str, company: models.Company) -> bool:
+    """About a fund's or investor's position in the stock, not about the company."""
+    low = " ".join(_norm(text).split())
+    for word in _id_words(company):
+        for p in patterns.INVESTOR_HOLDING_PATTERNS:
+            if re.search(p.format(name=re.escape(word)), low):
+                return True
+    return False
+
+
 def filter_articles(articles: list[models.Article], company: models.Company, cfg: settings.Config) -> list[models.Article]:
     kept = []
     for a in articles:
         if is_blocklisted(a) or not is_relevant(a, company):
+            continue
+        if is_third_party_release(a, company):
+            state._REPORT.count("dropped: another company's press release")
+            continue
+        if a.kind != "filing" and is_investor_holding(f"{a.headline}  {a.snippet}", company):
+            state._REPORT.count("dropped: an investor's stake, not company news")
             continue
         if a.kind != "filing" and is_excluded(f"{a.headline} {a.snippet}", company):
             state._REPORT.count("dropped: exclude term")

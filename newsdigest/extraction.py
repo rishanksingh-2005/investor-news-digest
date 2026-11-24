@@ -129,6 +129,8 @@ def _is_authentic(text: str) -> bool:
     if not text or len(text) < 400:
         return False
     low = text.lower()
+    if len(text) <= patterns.BOT_WALL_MAX_CHARS and any(m in low for m in patterns.BOT_WALL_MARKERS):
+        return False
     if sum(low.count(m) for m in patterns.JUNK_MARKERS) >= 2:
         return False
     if len(re.findall(r"[.!?]", text)) < 4:   # needs several sentences of prose
@@ -293,7 +295,9 @@ def extract_all(articles: list[models.Article], cfg: settings.Config) -> dict:
                                  cfg.failed_article_retry_hours * 3600)
         if hit is not None:
             a.final_url = hit["final_url"] or a.final_url
-            a.body, a.authentic = hit["body"] or "", hit["authentic"]
+            a.body = hit["body"] or ""
+            # re-checked so a stricter check also applies to pages cached before it
+            a.authentic = bool(hit["authentic"]) and _is_authentic(a.body)
             a.page_published = hit.get("published", "")
             stats["cached"] += 1
             continue

@@ -70,3 +70,24 @@ def test_extract_facts_pulls_money_percent_and_dates(nd):
     assert "14%" in facts["percent"]
     assert "4 Nov 2026" in facts["dates"]
     assert "2026-11-04" in facts["dates"]
+
+
+ROBOT_CHECK = ("Please confirm you're not a robot. To keep reading, tick the box below. Make sure your "
+               "browser allows JavaScript and cookies and isn't blocking them. Read our Terms of Service "
+               "and Cookie Policy for more. Need help? Contact our support team with the reference below. "
+               "Block reference: 8c1f-22aa. Thank you for your patience while we check your connection. "
+               "This usually takes a few seconds. You will be sent to the page you asked for afterwards.")
+
+
+def test_is_authentic_rejects_robot_check_pages(nd):
+    """A publisher's 'are you a robot?' page is long enough and has enough
+    sentences to pass the other checks: it must still not count as an article."""
+    assert len(ROBOT_CHECK) > 400
+    assert not nd._is_authentic(ROBOT_CHECK)
+    assert not nd._is_authentic(ROBOT_CHECK.replace("you're not a robot", "verify you are human"))
+
+
+def test_long_article_quoting_a_robot_check_phrase_is_still_authentic(nd, fixture_text):
+    body = nd._clean_body(nd._extract_article_text(fixture_text("article.html"), "https://example.com/a"))
+    padded = body + " Customers said the old site kept asking them to prove they are not a robot." + " More text." * 200
+    assert nd._is_authentic(padded)

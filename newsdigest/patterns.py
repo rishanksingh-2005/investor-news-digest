@@ -340,3 +340,71 @@ JUNK_MARKERS = [
     "you have reached your limit", "for unlimited access", "register to continue",
     "this content is not available in your", "please enable javascript",
 ]
+
+# Bot checks ("are you a robot?" pages). One of these on a short page is enough:
+# the page is the publisher's robot check, not the article.
+BOT_WALL_MARKERS = [
+    "you're not a robot", "you are not a robot", "are you a robot", "not a robot.",
+    "verify you are human", "verify you are a human", "verifying you are human",
+    "checking your browser before", "checking if the site connection is secure",
+    "unusual activity from your computer network", "unusual traffic from your computer network",
+    "press & hold to confirm", "press and hold to confirm", "complete the captcha", "solve the captcha",
+    "access to this page has been denied",
+]
+BOT_WALL_MAX_CHARS = 2500   # real articles that quote such a phrase are far longer
+
+# SEC Form 8-K item numbers -> what the company is reporting (9.01, the list of
+# exhibits, says nothing on its own and is left out).
+SEC_8K_ITEMS = {
+    "1.01": "Entered a material agreement", "1.02": "Ended a material agreement",
+    "1.03": "Bankruptcy or receivership", "1.04": "Mine safety violation",
+    "1.05": "Material cybersecurity incident",
+    "2.01": "Completed an acquisition or disposal", "2.02": "Results of operations",
+    "2.03": "New material financial obligation", "2.04": "Obligation accelerated",
+    "2.05": "Exit or restructuring costs", "2.06": "Material impairment",
+    "3.01": "Listing rule notice or delisting", "3.02": "Unregistered sale of shares",
+    "3.03": "Change to shareholder rights", "4.01": "Change of auditor",
+    "4.02": "Past financial statements no longer reliable", "5.01": "Change in control",
+    "5.02": "Director or officer change", "5.03": "Bylaw or fiscal-year change",
+    "5.07": "Shareholder vote results", "5.08": "Shareholder nominations",
+    "7.01": "Regulation FD disclosure", "8.01": "Other events",
+}
+
+# Other SEC forms, named for a reader who doesn't know the form numbers. Used when
+# EDGAR gives no description of its own.
+SEC_FORM_NAMES = {
+    "10-K": "Annual report", "10-Q": "Quarterly report", "20-F": "Annual report",
+    "40-F": "Annual report", "6-K": "Report of a foreign issuer",
+    "DEF 14A": "Proxy statement for the shareholder meeting",
+    "DEFA14A": "Additional proxy materials for the shareholder meeting",
+    "PRE 14A": "Preliminary proxy statement",
+    "3": "Insider's first report of holdings", "4": "Insider share transaction",
+    "5": "Insider's annual holdings report",
+    "144": "Insider's notice of a planned share sale",
+    "SC 13D": "Investor reports a 5%+ stake (may seek influence)",
+    "SC 13G": "Investor reports a 5%+ stake (passive)",
+    "SCHEDULE 13D": "Investor reports a 5%+ stake (may seek influence)",
+    "SCHEDULE 13G": "Investor reports a 5%+ stake (passive)",
+    "S-1": "Registration of new shares", "S-3": "Shelf registration for future offerings",
+    "S-4": "Registration of shares for a merger or acquisition",
+    "S-8": "Shares registered for employee plans",
+    "424B2": "Prospectus for a securities offering", "424B3": "Prospectus",
+    "424B5": "Prospectus for a securities offering", "FWP": "Offering terms (free writing prospectus)",
+    "SD": "Conflict minerals report", "11-K": "Employee savings plan annual report",
+}
+
+# Newswires carry releases from every company. A release on one whose headline
+# doesn't lead with the watchlist company is another company's announcement that
+# merely mentions it ("SalesCloser launches AI agent for Shopify stores").
+NEWSWIRE_KEYS = ["globenewswire", "prnewswire", "businesswire", "accesswire", "newsfilecorp",
+                 "newswire.ca", "einpresswire", "prweb", "newsfile"]
+NEWSWIRE_LEAD_WORDS = 6   # the issuer is named within the first few words
+
+# Stories about somebody else's position in the stock (a fund adding shares,
+# 13F holdings), not about the company. {name} is filled per company name word.
+INVESTOR_HOLDING_PATTERNS = [
+    r"\b(?:position|positions|holding|holdings) in (?:the )?{name}\b",
+    r"\b(?:keeps?|kept) (?:adding|buying|selling|trimming|loading up on)(?: to| more)? {name}\b",
+    r"\b(?:fund|funds|investor|investors|hedge fund|portfolio|billionaire)\b.{{0,60}}\bstake in {name}\b",
+    r"\b13f\b",
+]

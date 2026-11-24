@@ -80,6 +80,8 @@ def test_sec_edgar_one_entry_per_filing_own_filer_only(nd, cfg, fake_urlopen, fi
                           "000176725826000096/xpel-20261104.htm")
     assert out[0].final_url == out[0].url
     assert all(a.kind == "filing" and a.source == "SEC EDGAR" for a in out)
+    # the main 8-K document has no useful description: the items it reports are named instead
+    assert out[0].snippet == "Results of operations (Item 2.02)"
     assert out[1].snippet == "QUARTERLY REPORT"
     assert out[1].published == "2026-11-06"
     # the mutual fund that merely holds the stock is filtered out
@@ -160,3 +162,14 @@ def test_finnhub_resolves_symbol_and_parses_news(nd, cfg, fake_urlopen, monkeypa
     assert out[0].headline == "XPEL beats estimates"
     assert out[0].origin == "Finnhub" and out[0].snippet == "Revenue rose."
     assert out[0].published.startswith("2025-11-16")
+
+
+def test_sec_forms_without_a_description_are_named(nd, cfg, fake_urlopen):
+    import json
+    hit = {"_id": "0001-26-1:primary_doc.xml", "_source": {
+        "adsh": "0001-26-1", "ciks": ["0000320193"], "display_names": ["Apple Inc.  (AAPL)  (CIK 0000320193)"],
+        "file_type": "144", "form": "144", "root_forms": ["144"], "file_date": "2026-11-16"}}
+    fake_urlopen({"efts.sec.gov": [json.dumps({"hits": {"hits": [hit]}}).encode()]})
+    out = nd.discover_sec_edgar(nd.Company(name="Apple Inc.", exchange="XNAS"), cfg)
+    assert out[0].snippet == "Insider's notice of a planned share sale"
+    assert nd._fallback_bullet(out[0]) == "144 filed with the SEC: Insider's notice of a planned share sale."

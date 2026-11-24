@@ -246,7 +246,63 @@ def test_run_emails_the_published_digest(nd, cfg, smtp, tmp_path, monkeypatch):
     paths = nd.run(cfg)
     msg = _parse_mail(smtp.instances[0].sent[0].as_bytes(), policy=_mail_policy.default)
     assert [p.get_filename() for p in msg.walk() if p.get_filename()] == [os.path.basename(p) for p in paths]
-    assert "1 points across 1 companies" in msg.get_body(("plain",)).get_content()
+    text = msg.get_body(("plain",)).get_content()
+    assert "1 point across 1 company" in text and "£40m defence contract" in text
+    page = msg.get_body(("html",)).get_content()
+    assert "Acme Widgets Plc" in page and 'href="https://www.reuters.com/acme"' in page
+    assert msg.get_content_type() == "multipart/mixed"     # HTML + text body, then the attachments
+
+
+def _digest(nd):
+    c = nd.Company(name="Acme <Widgets> & Co", exchange="XLON", currency="GBp", tier=1)
+    a = nd.Article(headline="h", url="https://news.example/acme", source="Reuters",
+                   published="2026-11-17T09:00:00+00:00", bullet='Won a £40m contract <script>alert(1)</script>',
+                   heading="Contracts", final_url="https://www.reuters.com/acme")
+    a.extra_sources = [{"url": "https://www.ft.com/acme", "source": "FT"},
+                       {"url": "javascript:alert(1)", "source": "Bad"}]
+    c.articles = [a]
+    quiet = nd.Company(name="Quiet Plc", note="No material news in this window.")
+    return [c, quiet]
+
+
+def test_html_email_shows_the_digest_safely(nd):
+    cfg = nd.Config()
+    page = nd.digest_html(_digest(nd), cfg, [])
+    assert "Acme &lt;Widgets&gt; &amp; Co" in page and "<script>" not in page     # everything escaped
+    assert "Contracts" in page and "XLON · GBp · Tier 1" in page and "Reuters — 17 Nov 2026" in page
+    assert 'href="https://www.reuters.com/acme"' in page and 'href="https://www.ft.com/acme"' in page
+    assert "javascript:" not in page                                          # only web links
+    assert "Quiet Plc" in page and "1 point across 2 companies" in page
+    assert "attached as a PDF and a Word file" in page and "Not investment advice" in page
+
+
+def test_plain_text_email_is_the_full_digest(nd):
+    cfg = nd.Config()
+    cfg.email_attach_docx = False
+    text = nd.digest_text(_digest(nd), cfg, [])
+    assert "ACME <WIDGETS> & CO  (XLON · GBp · Tier 1)" in text and "  Contracts" in text
+    assert "Reuters, 17 Nov 2026: https://www.reuters.com/acme  https://www.ft.com/acme" in text
+    assert "javascript:" not in text and "attached as a PDF." in text
+
+
+def test_run_warnings_can_be_left_out_of_client_email(nd):
+    cfg = nd.Config()
+    warn = ["Finnhub: key rejected"]
+    assert "Finnhub: key rejected" in nd.digest_html(_digest(nd), cfg, warn)
+    assert "Finnhub: key rejected" in nd.digest_text(_digest(nd), cfg, warn)
+    cfg.email_show_warnings = False
+    assert "Finnhub" not in nd.digest_html(_digest(nd), cfg, warn)
+    assert "Finnhub" not in nd.digest_text(_digest(nd), cfg, warn)
+
+
+def test_html_part_sits_beside_text_and_attachments(nd, smtp, tmp_path):
+    pdf = tmp_path / "d.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    assert nd.send(_mail_cfg(nd), [str(pdf)], "s", "plain body", "<p>html body</p>")
+    msg = _parse_mail(smtp.instances[0].sent[0].as_bytes(), policy=_mail_policy.default)
+    assert [p.get_content_type() for p in msg.walk()] == [
+        "multipart/mixed", "multipart/alternative", "text/plain", "text/html", "application/pdf"]
+    assert msg.get_body().get_content().strip() == "<p>html body</p>"         # mail apps prefer the HTML
 
 
 # --- package / command ------------------------------------------------------------------

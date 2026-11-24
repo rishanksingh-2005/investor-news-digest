@@ -184,6 +184,12 @@ def discover_sec_edgar(company: models.Company, cfg: settings.Config) -> list[mo
         if cik:
             link = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/{fn or ''}"
         desc = (src.get("file_description") or "").strip()
+        if not desc or desc.upper() == form.upper():
+            # The main 8-K document has no description, but EDGAR lists the items
+            # it reports ("2.02" = results): name them so the bullet says something.
+            items = [f"{patterns.SEC_8K_ITEMS[i]} (Item {i})"
+                     for i in (src.get("items") or []) if i in patterns.SEC_8K_ITEMS]
+            desc = "; ".join(items) or patterns.SEC_FORM_NAMES.get(form.upper(), desc)
         out.append(models.Article(headline=f"SEC {form} filing — {who}", url=link, final_url=link,
                            source="SEC EDGAR", origin="SEC EDGAR", kind="filing",
                            published=src.get("file_date", ""), snippet=desc))
