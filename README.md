@@ -1,7 +1,7 @@
 # Investor News Digest
 
 [![CI](https://github.com/rishanksingh-2005/investor-news-digest/actions/workflows/ci.yml/badge.svg)](https://github.com/rishanksingh-2005/investor-news-digest/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 An investor-focused news digest for **your own watchlist** of listed companies.
 Point it at your company list (Excel, CSV, JSON or a plain text file, with
@@ -14,7 +14,7 @@ Companies can be split into priority **tiers**; by default Tiers 1, 2 and 3 go
 into a single combined digest.
 
 ```bash
-pip install git+https://github.com/rishanksingh-2005/investor-news-digest
+pip install investor_news_digest-<version>-py3-none-any.whl   # the package file you were sent
 newsdigest --init-config                                # config.yaml with every setting explained
 newsdigest --watchlist my_companies.xlsx --check        # see how your file is read
 newsdigest --watchlist my_companies.xlsx                # build the digest (and email it, if set up)
@@ -204,10 +204,15 @@ ignores the cache and fetches everything fresh.
 
 ### Option A: install the `newsdigest` command (recommended for users)
 
+This is licensed software (see [Licence](#licence)). Install it from the package
+file you were sent, or from the private repository if you were given access:
+
 ```bash
 python -m venv digest-env
 digest-env\Scripts\activate          # macOS / Linux: source digest-env/bin/activate
-pip install git+https://github.com/rishanksingh-2005/investor-news-digest
+pip install investor_news_digest-<version>-py3-none-any.whl
+# or, with access to the repository (signs in to GitHub):
+pip install git+https://github.com/rishanksingh-2005/investor-news-digest@v<version>
 ```
 
 Then work in a folder of your choice (one per client works well). Everything
@@ -627,7 +632,7 @@ eval/                   labelled accuracy cases (golden.json) and the scorer
 NLP/                    optional local BART model (not in git)
 digest_cache.sqlite     run cache, created on first run (not in git)
 logs/                   one log per run, with the run report (not in git)
-LICENSE                 MIT
+LICENSE                 proprietary licence
 ```
 
 ## Limitations
@@ -652,6 +657,8 @@ LICENSE                 MIT
 *Summaries are AI-assisted. Verify against the linked source before making any
 investment decision. Not investment advice.*
 
-## License
+## Licence
 
-[MIT](LICENSE)
+Proprietary: copyright (c) 2026 Rishank Singh, all rights reserved. Use requires
+a written licence agreement; see [LICENSE](LICENSE). Versions up to and including
+1.1.0 were published under the MIT License, and copies of those keep that licence.

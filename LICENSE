@@ -1,21 +1,36 @@
-MIT License
+Investor News Digest
+Proprietary Software Licence
 
-Copyright (c) 2026 Rishank Singh
+Copyright (c) 2026 Rishank Singh. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Ownership. This software, its source code, documentation and sample
+   material (the "Software") are the property of Rishank Singh (the "Owner")
+   and are confidential.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. No licence without agreement. Nobody may use, copy, install, modify,
+   merge, publish, distribute, sublicense, sell, rent, lend or otherwise make
+   available the Software, in whole or in part, except under a separate
+   written licence agreement signed by the Owner (a "Licence Agreement"), and
+   only as that agreement allows.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+3. Licence Agreements. Where a Licence Agreement exists, its terms govern.
+   Where it is silent on a matter, this notice applies.
+
+4. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+   KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+   The Software produces AI-assisted summaries of third-party news. They may
+   be incomplete or wrong, and they are not investment advice.
+
+5. Limitation of liability. TO THE EXTENT PERMITTED BY LAW, IN NO EVENT SHALL
+   THE OWNER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+   AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR ITS USE, INCLUDING ANY DECISION MADE ON
+   THE BASIS OF ITS OUTPUT.
+
+6. Earlier versions. Versions up to and including 1.1.0 (git tag v1.1.0)
+   were published under the MIT License. Copies of those versions obtained
+   under that licence remain under it. This notice applies to every later
+   version.
+
+Licensing enquiries: contact Rishank Singh (GitHub: rishanksingh-2005).

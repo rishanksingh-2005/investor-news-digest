@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]   # 77+: SPDX licence expressions
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "investor-news-digest"
-version = "1.1.0"
+version = "1.2.0.dev0"
 description = "Investor news digest for your own company watchlist: Google News, SEC EDGAR and Finnhub, summarised by an LLM with a number check, published as PDF and Word."
 readme = "README.md"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 license-files = ["LICENSE"]
 authors = [{ name = "Rishank Singh" }]
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Intended Audience :: Financial and Insurance Industry",
     "Topic :: Office/Business :: Financial :: Investment",
+    "Private :: Do Not Upload",   # PyPI rejects any upload carrying this
 ]
 # Keep in step with requirements.txt (which pins the same minimums for a
 # plain `pip install -r requirements.txt` checkout).
