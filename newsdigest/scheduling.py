@@ -28,7 +28,9 @@ from . import settings
 
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 _DAY_ALIASES = {"daily": DAYS, "everyday": DAYS, "weekdays": DAYS[:5], "weekends": DAYS[5:]}
-OUTPUT_LOG = os.path.join("logs", "last-scheduled-run.txt")
+OUTPUT_LOG = os.path.join("logs", "last-scheduled-run.txt")     # for messages on this machine
+# Inside the launchers: each script uses its own system's separator, wherever it was generated.
+OUTPUT_LOG_WIN, OUTPUT_LOG_UNIX = "logs\\last-scheduled-run.txt", "logs/last-scheduled-run.txt"
 
 
 class ScheduleError(ValueError):
@@ -152,7 +154,7 @@ def launcher_text(home: str, args: list[str], system: str | None = None, python:
                 'set "PYTHONIOENCODING=utf-8"\r\n'
                 + (f'set "PYTHONPATH={checkout};%PYTHONPATH%"\r\n' if checkout else "")
                 + 'if not exist logs mkdir logs\r\n'
-                f'{cmd} > "{OUTPUT_LOG}" 2>&1\r\n')
+                f'{cmd} > "{OUTPUT_LOG_WIN}" 2>&1\r\n')
     cmd = shlex.join([python, "-m", "newsdigest", *args])
     return ("#!/bin/sh\n"
             "# Created by newsdigest --schedule: runs the news digest for this folder.\n"
@@ -162,7 +164,7 @@ def launcher_text(home: str, args: list[str], system: str | None = None, python:
             "export PYTHONIOENCODING=utf-8\n"
             + (f'export PYTHONPATH={shlex.quote(checkout)}"${{PYTHONPATH:+:$PYTHONPATH}}"\n' if checkout else "")
             + "mkdir -p logs\n"
-            f"exec {cmd} > {shlex.quote(OUTPUT_LOG)} 2>&1\n")
+            f"exec {cmd} > {shlex.quote(OUTPUT_LOG_UNIX)} 2>&1\n")
 
 
 def write_launcher(home: str, args: list[str], system: str | None = None) -> str:
